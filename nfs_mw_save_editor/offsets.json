@@ -1,0 +1,49 @@
+{
+  "money_offset": 16441,
+  "bounty_offset": 58109,
+  "junkman_mask_offset": null,
+  "junkman_labels": [
+    "Engine",
+    "Turbo",
+    "Transmission",
+    "Suspension",
+    "Brakes",
+    "Tires",
+    "Nitrous",
+    "Other"
+  ],
+  "junkman_inventory": {
+    "engine": {
+      "offset": null,
+      "size": null
+    },
+    "turbo": {
+      "offset": null,
+      "size": null
+    },
+    "transmission": {
+      "offset": null,
+      "size": null
+    },
+    "suspension": {
+      "offset": 22397,
+      "size": "u8"
+    },
+    "brakes": {
+      "offset": null,
+      "size": null
+    },
+    "tires": {
+      "offset": null,
+      "size": null
+    },
+    "nitrous": {
+      "offset": null,
+      "size": null
+    },
+    "supercharger": {
+      "offset": null,
+      "size": null
+    }
+  }
+}
