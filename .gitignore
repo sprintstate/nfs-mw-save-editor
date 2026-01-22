@@ -10,6 +10,9 @@ __pycache__/
 *~
 *.swp
 *.swo
+*.manifest
+*.ico
+*.exe
 
 # Virtual envs
 .venv/
