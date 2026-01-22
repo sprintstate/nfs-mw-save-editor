@@ -52,6 +52,19 @@ QPushButton:checked {{
     color: #0b0c0f;
     border-color: {ACCENT};
 }}
+QPushButton#navButton {{
+    text-align: left;
+    padding: 8px 12px 8px 14px;
+    border-left: 3px solid transparent;
+}}
+QPushButton#navButton:checked {{
+    background: #1a1b27;
+    border-left: 3px solid {ACCENT};
+    color: {ACCENT};
+}}
+QPushButton#navButton:hover {{
+    background: #161722;
+}}
 QPushButton#catButton {{
     padding: 6px 12px;
     min-height: 28px;
@@ -65,6 +78,10 @@ QWidget#tokenRow {{
     background: {BG_PANEL};
     border: 1px solid {BORDER};
     border-radius: 10px;
+}}
+QWidget#tokenRow[changed="true"] {{
+    border: 1px solid {ACCENT};
+    background: rgba(242, 194, 0, 0.08);
 }}
 QLabel#haveLabel {{
     color: {MUTED};
@@ -106,6 +123,14 @@ QToolButton {{
     border: 1px solid {ACCENT_SOFT};
     border-radius: 8px;
     padding: 8px 12px;
+}}
+QLabel#unsavedLabel {{
+    color: {ACCENT};
+    font-weight: 600;
+    padding-left: 6px;
+}}
+QLabel#filePath {{
+    color: {TEXT};
 }}
 QMenu {{
     background: {BG_PANEL};

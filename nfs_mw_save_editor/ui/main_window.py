@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
         self.safe_mode = True
         self.preserve_unknown = True
         self.clear_unknown_next = False
+        self.show_only_changed = False
 
         self.load_catalog()
         self._build_ui()
@@ -254,13 +255,17 @@ class MainWindow(QMainWindow):
         self.btn_save_header.clicked.connect(self.on_save)
         self.btn_fix.clicked.connect(self.on_fix_checksums)
         self.lbl_file = QLabel("File: (not opened)")
+        self.lbl_file.setObjectName("filePath")
         self.lbl_status = QLabel("Status: -")
         self.lbl_status.setObjectName("mutedLabel")
+        self.lbl_unsaved = QLabel("")
+        self.lbl_unsaved.setObjectName("unsavedLabel")
         row.addWidget(self.btn_open)
         row.addWidget(self.btn_save_header)
         row.addWidget(self.btn_fix)
         row.addStretch(1)
-        row.addWidget(self.lbl_file)
+        row.addWidget(self.lbl_file, 1)
+        row.addWidget(self.lbl_unsaved)
         row.addWidget(self.lbl_status)
         return row
 
@@ -269,11 +274,15 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
         layout.setAlignment(Qt.AlignTop)
         self.nav_buttons: Dict[str, QPushButton] = {}
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
         for name in ["Junkman", "Profile", "Presets", "Settings", "About"]:
             btn = QPushButton(name)
+            btn.setObjectName("navButton")
             btn.setCheckable(True)
             btn.clicked.connect(lambda _, n=name: self._select_page(n))
             self.nav_buttons[name] = btn
+            self.nav_group.addButton(btn)
             layout.addWidget(btn)
         layout.addStretch(1)
         return layout
@@ -291,6 +300,10 @@ class MainWindow(QMainWindow):
         self.search.setPlaceholderText("Search tokens...")
         self.search.textChanged.connect(self.refresh_cards)
         left.addWidget(self.search)
+
+        self.chk_show_changed = QCheckBox("Show only changed")
+        self.chk_show_changed.stateChanged.connect(self.on_toggle_show_changed)
+        left.addWidget(self.chk_show_changed)
 
         cat_row = QVBoxLayout()
         cat_row.setSpacing(6)
@@ -448,7 +461,7 @@ class MainWindow(QMainWindow):
     def _section_header(self, text: str) -> QWidget:
         wrapper = QWidget()
         row = QHBoxLayout(wrapper)
-        row.setContentsMargins(0, 8, 0, 2)
+        row.setContentsMargins(0, 6, 0, 2)
         row.setSpacing(10)
         lbl = self._section_label(text)
         line = QFrame()
@@ -598,6 +611,11 @@ class MainWindow(QMainWindow):
                 return False
             if term and term not in tok.name.lower() and term not in str(tok.id):
                 return False
+            if self.show_only_changed:
+                have = self.have_counts.get(tok.id, 0)
+                want = self.want_counts.get(tok.id, have)
+                if want == have:
+                    return False
             return True
 
         any_added = False
@@ -619,16 +637,45 @@ class MainWindow(QMainWindow):
                     on_change=self.on_want_changed,
                     on_rename=self.on_token_renamed,
                 )
+                row.setProperty("changed", want != have)
+                row.style().unpolish(row)
+                row.style().polish(row)
                 self.section_rows[cat].addWidget(row)
 
         self.empty_label.setVisible(not any_added)
         self._update_free_label()
+        self._update_action_states()
 
     def _update_free_label(self):
         cap = self._slot_capacity()
         used = sum(self.have_counts.values())
         free = max(0, cap - used)
         self.lbl_free.setText(f"Free slots: {free}/{cap}")
+        self._update_header_path()
+
+    def _has_pending_changes(self) -> bool:
+        for tid in set(self.want_counts.keys()) | set(self.have_counts.keys()):
+            if self.want_counts.get(tid, 0) != self.have_counts.get(tid, 0):
+                return True
+        if self.clear_unknown_next:
+            return True
+        return False
+
+    def _update_action_states(self):
+        pending = self._has_pending_changes()
+        enabled = self.savefile is not None
+        self.btn_apply.setEnabled(enabled and pending)
+        self.btn_reset_want.setEnabled(enabled)
+        if pending:
+            self.lbl_unsaved.setText("● Unsaved changes")
+        else:
+            self.lbl_unsaved.setText("")
+
+    def _update_header_path(self):
+        text = "File: (not opened)" if not self.savefile else f"{self.savefile.path}"
+        fm = self.lbl_file.fontMetrics()
+        available = max(120, self.lbl_file.width())
+        self.lbl_file.setText(fm.elidedText(text, Qt.ElideMiddle, available))
 
     # ---------- Events ----------
     def on_token_renamed(self, tid: int, new_name: str):
@@ -641,6 +688,7 @@ class MainWindow(QMainWindow):
 
     def on_want_changed(self, tid: int, val: int):
         self.want_counts[tid] = val
+        self._update_action_states()
 
     def on_range_toggle(self):
         if self.sender() == self.chk_safe and self.chk_safe.isChecked():
@@ -656,6 +704,10 @@ class MainWindow(QMainWindow):
 
     def on_preserve_toggle(self):
         self.preserve_unknown = self.chk_preserve_unknown.isChecked()
+
+    def on_toggle_show_changed(self):
+        self.show_only_changed = self.chk_show_changed.isChecked()
+        self.refresh_cards()
 
     def on_clear_unknown_confirm(self):
         if not self.savefile:

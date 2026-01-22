@@ -1,23 +1,104 @@
 {
   "tokens": [
-    { "id": 1, "name": "Brakes", "category": "Performance" },
-    { "id": 2, "name": "Engine", "category": "Performance" },
-    { "id": 3, "name": "NOS", "category": "Performance" },
-    { "id": 4, "name": "Turbo", "category": "Performance" },
-    { "id": 5, "name": "Suspension", "category": "Performance" },
-    { "id": 6, "name": "Tires", "category": "Performance" },
-    { "id": 7, "name": "Transmission", "category": "Performance" },
-    { "id": 8, "name": "Body", "category": "Visual" },
-    { "id": 9, "name": "Hood", "category": "Visual" },
-    { "id": 10, "name": "Spoiler", "category": "Visual" },
-    { "id": 11, "name": "Rims", "category": "Visual" },
-    { "id": 12, "name": "Roof", "category": "Visual" },
-    { "id": 13, "name": "Gauge", "category": "Visual" },
-    { "id": 14, "name": "Vinyl", "category": "Visual" },
-    { "id": 15, "name": "Decal", "category": "Visual" },
-    { "id": 16, "name": "Paint", "category": "Visual" },
-    { "id": 17, "name": "Out of Jail", "category": "Police" },
-    { "id": 18, "name": "Imp. Strike?", "category": "Police" },
-    { "id": 19, "name": "Imp. Release?", "category": "Police" }
+    {
+      "id": 1,
+      "name": "Brakes",
+      "category": "Performance"
+    },
+    {
+      "id": 2,
+      "name": "Engine",
+      "category": "Performance"
+    },
+    {
+      "id": 3,
+      "name": "NOS",
+      "category": "Performance"
+    },
+    {
+      "id": 4,
+      "name": "Turbo",
+      "category": "Performance"
+    },
+    {
+      "id": 5,
+      "name": "Suspension",
+      "category": "Performance"
+    },
+    {
+      "id": 6,
+      "name": "Tires",
+      "category": "Performance"
+    },
+    {
+      "id": 7,
+      "name": "Transmission",
+      "category": "Performance"
+    },
+    {
+      "id": 8,
+      "name": "Body",
+      "category": "Visual"
+    },
+    {
+      "id": 9,
+      "name": "Hood",
+      "category": "Visual"
+    },
+    {
+      "id": 10,
+      "name": "Spoiler",
+      "category": "Visual"
+    },
+    {
+      "id": 11,
+      "name": "Rims",
+      "category": "Visual"
+    },
+    {
+      "id": 12,
+      "name": "Roof",
+      "category": "Visual"
+    },
+    {
+      "id": 13,
+      "name": "Gauge",
+      "category": "Visual"
+    },
+    {
+      "id": 14,
+      "name": "Vinyl",
+      "category": "Visual"
+    },
+    {
+      "id": 15,
+      "name": "Decal",
+      "category": "Visual"
+    },
+    {
+      "id": 16,
+      "name": "Paint",
+      "category": "Visual"
+    },
+    {
+      "id": 17,
+      "name": "Out of Jail",
+      "category": "Police"
+    },
+    {
+      "id": 18,
+      "name": "???",
+      "category": "Police"
+    },
+    {
+      "id": 19,
+      "name": "lmp. Release?",
+      "category": "Police"
+    },
+    {
+      "id": 20,
+      "name": "Imp. Strike",
+      "category": "Unknown"
+    }
   ]
 }
