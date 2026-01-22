@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -28,10 +31,42 @@ from PySide6.QtWidgets import (
 
 from core.junkman import JunkmanInventory
 from core.savefile import SaveFile
+from resources import resource_path
 
 
 CAT_LIST = ["All", "Performance", "Visual", "Police", "Unknown"]
-TOKEN_CATALOG_PATH = Path("token_catalog.json")
+APP_NAME = "NFS_MW_Junkman_Editor"
+CATALOG_FILENAME = "token_catalog.json"
+
+
+def _appdata_dir() -> Path:
+    base = os.getenv("APPDATA")
+    if base:
+        return Path(base)
+    return Path.home() / "AppData" / "Roaming"
+
+
+def _user_catalog_path() -> Path:
+    return _appdata_dir() / APP_NAME / CATALOG_FILENAME
+
+
+def _default_catalog_path() -> Path:
+    return resource_path(CATALOG_FILENAME)
+
+
+def _ensure_user_catalog_path() -> Path:
+    user_path = _user_catalog_path()
+    if user_path.exists():
+        return user_path
+    user_path.parent.mkdir(parents=True, exist_ok=True)
+    default_path = _default_catalog_path()
+    if default_path.exists():
+        try:
+            shutil.copyfile(default_path, user_path)
+            return user_path
+        except Exception:
+            pass
+    return user_path
 
 
 @dataclass
@@ -119,6 +154,9 @@ class TokenRow(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        icon_path = resource_path("assets", "icon.ico")
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         self.setWindowTitle("NFS MW 2005 - Junkman Inventory (PC v1.3)")
 
         self.savefile: Optional[SaveFile] = None
@@ -130,6 +168,7 @@ class MainWindow(QMainWindow):
         self.clear_unknown_next = False
         self.show_only_changed = False
 
+        self.catalog_path = _ensure_user_catalog_path()
         self.load_catalog()
         self._build_ui()
         self.refresh_state()
@@ -166,9 +205,9 @@ class MainWindow(QMainWindow):
             return out
 
         self.tokens = []
-        if TOKEN_CATALOG_PATH.exists():
+        if self.catalog_path.exists():
             try:
-                raw = json.loads(TOKEN_CATALOG_PATH.read_text(encoding="utf-8"))
+                raw = json.loads(self.catalog_path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict) and "tokens" in raw and isinstance(raw["tokens"], list):
                     self.tokens = from_list(raw["tokens"])
                 elif isinstance(raw, dict):
@@ -194,14 +233,17 @@ class MainWindow(QMainWindow):
                 (15, "Decal", "Visual"),
                 (16, "Paint", "Visual"),
                 (17, "Out of Jail", "Police"),
-                (18, "Imp. Strike?", "Police"),
+                (20, "Imp. Strike", "Police"),
                 (19, "Imp. Release?", "Police"),
+                (18, "Unknown ID 18", "Unknown"),
             ]
             self.tokens = [TokenEntry(id=i, name=n, category=c) for i, n, c in defaults]
+            self.save_catalog()
 
     def save_catalog(self):
         data = {"tokens": [{"id": t.id, "name": t.name, "category": t.category} for t in self.tokens]}
-        TOKEN_CATALOG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        self.catalog_path.parent.mkdir(parents=True, exist_ok=True)
+        self.catalog_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def ensure_token_entry(self, tid: int):
         if any(t.id == tid for t in self.tokens):
@@ -256,6 +298,7 @@ class MainWindow(QMainWindow):
         self.btn_fix.clicked.connect(self.on_fix_checksums)
         self.lbl_file = QLabel("File: (not opened)")
         self.lbl_file.setObjectName("filePath")
+        self.lbl_file.setAlignment(Qt.AlignCenter)
         self.lbl_status = QLabel("Status: -")
         self.lbl_status.setObjectName("mutedLabel")
         self.lbl_unsaved = QLabel("")
@@ -413,11 +456,21 @@ class MainWindow(QMainWindow):
         self.lbl_limits = QLabel("Limits: -")
         self.lbl_limits.setObjectName("mutedLabel")
 
+        self.lbl_catalog_path = QLabel(f"Catalog: {self.catalog_path}")
+        self.lbl_catalog_path.setObjectName("mutedLabel")
+        self.lbl_catalog_path.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.btn_open_catalog = QPushButton("Open folder")
+        self.btn_open_catalog.clicked.connect(self.on_open_catalog_folder)
+        catalog_row = QHBoxLayout()
+        catalog_row.addWidget(self.lbl_catalog_path, 1)
+        catalog_row.addWidget(self.btn_open_catalog)
+
         layout.addWidget(self.chk_preserve_unknown)
         layout.addWidget(self.chk_safe)
         layout.addWidget(self.chk_adv)
         layout.addWidget(self.btn_clear_unknown)
         layout.addWidget(self.lbl_limits)
+        layout.addLayout(catalog_row)
         layout.addStretch(1)
         return w
 
@@ -655,7 +708,9 @@ class MainWindow(QMainWindow):
 
     def _has_pending_changes(self) -> bool:
         for tid in set(self.want_counts.keys()) | set(self.have_counts.keys()):
-            if self.want_counts.get(tid, 0) != self.have_counts.get(tid, 0):
+            have = self.have_counts.get(tid, 0)
+            want = self.want_counts.get(tid, have)
+            if want != have:
                 return True
         if self.clear_unknown_next:
             return True
@@ -677,6 +732,10 @@ class MainWindow(QMainWindow):
         available = max(120, self.lbl_file.width())
         self.lbl_file.setText(fm.elidedText(text, Qt.ElideMiddle, available))
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_header_path()
+
     # ---------- Events ----------
     def on_token_renamed(self, tid: int, new_name: str):
         for t in self.tokens:
@@ -688,6 +747,17 @@ class MainWindow(QMainWindow):
 
     def on_want_changed(self, tid: int, val: int):
         self.want_counts[tid] = val
+        if self.show_only_changed:
+            self.refresh_cards()
+            return
+        # update row highlight without full refresh
+        sender = self.sender()
+        if sender is not None and hasattr(sender, "parent"):
+            row = sender.parent()
+            have = self.have_counts.get(tid, 0)
+            row.setProperty("changed", val != have)
+            row.style().unpolish(row)
+            row.style().polish(row)
         self._update_action_states()
 
     def on_range_toggle(self):
@@ -839,6 +909,15 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Exported", f"Have exported to {path}")
 
     # ---------- File ops ----------
+    def on_open_catalog_folder(self):
+        folder = self.catalog_path.parent
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        if not opened and hasattr(os, "startfile"):
+            try:
+                os.startfile(folder)
+            except Exception:
+                pass
+
     def on_open(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open save", str(Path.home()), "All files (*.*)")
         if not path:

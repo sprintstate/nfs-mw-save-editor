@@ -26,6 +26,7 @@ env/
 # Build artifacts
 build/
 dist/
+release/
 *.spec
 *.egg-info/
 .eggs/
@@ -50,4 +51,5 @@ htmlcov/
 .env.*
 
 # Misc
+*.zip
 .python-version

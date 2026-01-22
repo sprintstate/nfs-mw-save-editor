@@ -1,12 +1,12 @@
 ﻿from __future__ import annotations
 
-ACCENT = "#f2c200"
-ACCENT_SOFT = "#2b2510"
-BG = "#0b0c0f"
-BG_PANEL = "#11121a"
-TEXT = "#f7f7f8"
-MUTED = "#a9abb5"
-BORDER = "#1f2230"
+ACCENT = "#6fea4d"
+ACCENT_SOFT = "#182717"
+BG = "#0a0f0a"
+BG_PANEL = "#101810"
+TEXT = "#f1f5f1"
+MUTED = "#9bb09b"
+BORDER = "#1f2b1f"
 
 STYLE = f"""
 QWidget {{
@@ -44,8 +44,8 @@ QPushButton {{
     padding: 8px 12px;
     font-weight: 600;
 }}
-QPushButton:hover {{ background-color: #191a2b; }}
-QPushButton:pressed {{ background-color: #0e0f18; }}
+QPushButton:hover {{ background-color: #162116; }}
+QPushButton:pressed {{ background-color: #0c130c; }}
 QPushButton:disabled {{ color: #555; border-color: #333; }}
 QPushButton:checked {{
     background: {ACCENT};
@@ -58,12 +58,12 @@ QPushButton#navButton {{
     border-left: 3px solid transparent;
 }}
 QPushButton#navButton:checked {{
-    background: #1a1b27;
+    background: #182118;
     border-left: 3px solid {ACCENT};
     color: {ACCENT};
 }}
 QPushButton#navButton:hover {{
-    background: #161722;
+    background: #141c14;
 }}
 QPushButton#catButton {{
     padding: 6px 12px;
@@ -81,7 +81,7 @@ QWidget#tokenRow {{
 }}
 QWidget#tokenRow[changed="true"] {{
     border: 1px solid {ACCENT};
-    background: rgba(242, 194, 0, 0.08);
+    background: rgba(111, 234, 77, 0.08);
 }}
 QLabel#haveLabel {{
     color: {MUTED};
@@ -152,7 +152,7 @@ QScrollBar::handle:vertical {{
     min-height: 20px;
     border-radius: 6px;
 }}
-QScrollBar::handle:vertical:hover {{ background: #ffdb3d; }}
+QScrollBar::handle:vertical:hover {{ background: #8fff6a; }}
 """
 
 def apply_theme(app) -> None:
