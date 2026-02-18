@@ -56,3 +56,4 @@ AGENT_CONTEXT.md
 
 # Local developer-only files
 dev_assets/
+artifacts/

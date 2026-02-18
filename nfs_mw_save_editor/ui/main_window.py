@@ -1,4 +1,4 @@
-﻿"""
+"""
 NFS MW 2005 - Junkman Inventory Editor (main window)
 
 The main window only keeps:
@@ -333,6 +333,19 @@ class MainWindow(QMainWindow):
             pix = pix.copy(min_x, min_y, (max_x - min_x + 1), (max_y - min_y + 1))
         pix = pix.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         return QIcon(pix)
+
+    @staticmethod
+    def _brand_pixmap(size: int) -> QPixmap:
+        png_path = resource_path("assets", "icon.png")
+        pix = QPixmap(str(png_path))
+        if pix.isNull():
+            ico_path = resource_path("assets", "icon.ico")
+            if ico_path.exists():
+                pix = QIcon(str(ico_path)).pixmap(size, size)
+        if pix.isNull():
+            return QPixmap()
+        return pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
     # -- Navigation sidebar -----------------------------------------------
 
     def _build_nav(self):
@@ -514,9 +527,8 @@ class MainWindow(QMainWindow):
 
         ov_icon = QLabel()
         ov_icon.setAlignment(Qt.AlignCenter)
-        icon_p = resource_path("assets", "icon.png")
-        if icon_p.exists():
-            pix = QPixmap(str(icon_p)).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        pix = self._brand_pixmap(64)
+        if not pix.isNull():
             ov_icon.setPixmap(pix)
         ov_layout.addWidget(ov_icon)
 
@@ -631,13 +643,12 @@ class MainWindow(QMainWindow):
         # Logo
         logo_label = QLabel()
         logo_label.setAlignment(Qt.AlignCenter)
-        logo_path = resource_path("assets", "icon.png")
-        if logo_path.exists():
-            pix = QPixmap(str(logo_path)).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        pix = self._brand_pixmap(80)
+        if not pix.isNull():
             logo_label.setPixmap(pix)
         layout.addWidget(logo_label)
 
-        title = QLabel("NFS MW 2005 — Junkman Inventory Editor")
+        title = QLabel("NFS MW 2005 - Junkman Inventory Editor")
         title.setObjectName("aboutTitle")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
@@ -1235,26 +1246,3 @@ class MainWindow(QMainWindow):
 
 def build_window() -> MainWindow:
     return MainWindow()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
