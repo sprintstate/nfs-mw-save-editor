@@ -111,7 +111,8 @@ class JunkmanInventory:
     def get_counts(self) -> Dict[int, int]:
         counts: Dict[int, int] = {}
         for slot in self.read_slots():
-            if slot.type_id == 0:
+            # +0x08 is an "unused" state flag (1 = available marker).
+            if slot.type_id == 0 or slot.count != 1:
                 continue
             counts[slot.type_id] = counts.get(slot.type_id, 0) + 1
         return counts

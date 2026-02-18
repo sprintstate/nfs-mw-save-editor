@@ -1,7 +1,7 @@
 # NFS Most Wanted 2005 — Save Editor
 
-Desktop save editor for **Need for Speed: Most Wanted (2005)** on PC (v1.3).  
-Built with **Python 3** and **PySide6**. Dark theme inspired by the game's aesthetic.
+Desktop save editor for **Need for Speed: Most Wanted (2005)** on PC (v1.3).
+Built with **Python 3** and **PySide6**. Dark blue UI theme with original game icons.
 
 ---
 
@@ -9,10 +9,12 @@ Built with **Python 3** and **PySide6**. Dark theme inspired by the game's aesth
 
 ### Junkman Inventory Editor
 - Edit all **22 token types** — Performance (Brakes, Engine, NOS, Turbo…), Visual (Body, Hood, Spoiler…), Police (Out of Jail, Impound Release…)
+- **Card grid** layout with icons extracted from the original game
 - **Quick actions** — unlock all Performance / Visual / All tokens in one click
-- Search and filter tokens by category
+- Search and filter tokens by category (with category icons)
 - Real-time "Have" vs "Want" comparison with unsaved changes indicator
-- Adjustable per-token counts via spinbox or +/− buttons
+- Per-token counts via spinbox, slider, or +/− buttons
+- Performance progress bar in footer (`X/7 Performance`)
 
 ### Save Integrity
 - Automatic **MD5 hash** verification (supports `md5_saved_data` and `md5_all_minus_tail` schemes)
@@ -23,7 +25,7 @@ Built with **Python 3** and **PySide6**. Dark theme inspired by the game's aesth
 ### Junkman Slot Detection
 - **Auto-detection** of the Junkman slot array within saved data (stride `0x0C`)
 - Heuristic scanning with configurable range (`0x5400`–`0x5B00` relative to saved data)
-- Shows free/total slot capacity
+- Shows free/total slot capacity with real-time projected preview
 
 ### Presets & Catalog
 - Load / save token presets as JSON files
@@ -32,9 +34,16 @@ Built with **Python 3** and **PySide6**. Dark theme inspired by the game's aesth
 - Catalog stored in `%APPDATA%/NFS_MW_Junkman_Editor/` for persistence across updates
 
 ### Settings
-- **Safe mode** (max 63 per token) / **Advanced mode** (max 255)
-- Preserve Unknown tokens on apply
-- Clear Unknown tokens (with confirmation)
+- **Default cap ≤ 10** per token (practical mode)
+- Optional **Unlock limit (≤ 63)** toggle for advanced users
+- Preserve or clear Unknown tokens on apply (with confirmation)
+
+### UX
+- **Keyboard shortcuts**: `Ctrl+O` open, `Ctrl+S` save, `Ctrl+Z` reset
+- **Drag & drop** save files onto the window to open
+- **Toast notifications** for non-blocking success feedback
+- **Fade-in animations** on card grid, hover effects on cards
+- About page with version info and shortcuts reference
 
 ### Other
 - Automatic **backup** on every save (`*.bak`)
@@ -49,7 +58,7 @@ Built with **Python 3** and **PySide6**. Dark theme inspired by the game's aesth
 
 ```bash
 # Clone the repo
-git clone https://github.com/sprintstate/nfs-mw-save-editor.git
+git clone https://github.com/<sprintstate>/nfs-mw-save-editor.git
 cd nfs-mw-save-editor/nfs_mw_save_editor
 
 # Create virtual environment
@@ -72,14 +81,14 @@ Download the latest `.exe` from [Releases](../../releases) — no Python install
 
 ## Usage
 
-1. Click **Open save** and select your NFS MW save file  
-   (default location: `%APPDATA%\NFS Most Wanted\`)
-2. Adjust token counts in the **Junkman** tab using spinboxes or quick-action buttons
+1. Click **Open save** (or press `Ctrl+O`, or drag a save file onto the window)
+   Default save location: `%APPDATA%\NFS Most Wanted\`
+2. Adjust token counts in the **Junkman** tab using spinboxes, sliders, or quick-action buttons
 3. Click **Apply (memory)** to stage changes
-4. Click **Save + backup** to write changes to disk (original file backed up as `.bak`)
+4. Click **Save + backup** (or press `Ctrl+S`) to write changes to disk (original file backed up as `.bak`)
 5. Use **Fix checksums** if the game does not accept the modified save
 
-> **Tip:** Use `Settings → Safe max (≤ 63)` to avoid potential game instability from high token counts.
+> **Tip:** The default per-token cap is 10 — enable `Settings → Unlock limit (≤ 63)` for higher values.
 
 ---
 
@@ -93,19 +102,30 @@ nfs_mw_save_editor/
 ├── token_catalog.json      # Default token definitions (22 types)
 │
 ├── core/                   # Save file logic (no Qt dependency)
-│   ├── savefile.py         # SaveFile class — load, validate, fix, read/write slots
+│   ├── savefile.py         # SaveFile — load, validate, fix, read/write slots
 │   ├── checksums.py        # EA CRC32 implementation (poly 0x04C11DB7)
-│   ├── junkman.py          # JunkmanInventory — slot detection, read/write, apply counts
-│   ├── diff.py             # Byte-level and u32-aligned diff utilities
-│   └── patch.py            # Low-level read/write helpers (u32, u8, bitmask)
+│   ├── junkman.py          # JunkmanInventory — slot detection, apply counts
+│   ├── diff.py             # Byte-level diff utilities
+│   └── patch.py            # Low-level read/write helpers (u32, u8)
 │
 ├── ui/                     # PySide6 interface
-│   ├── main_window.py      # MainWindow — all pages (Junkman, Profile, Presets, Settings, About)
-│   └── theme.py            # Dark green theme (QSS stylesheet)
+│   ├── main_window.py      # MainWindow — all pages and coordination
+│   ├── widgets.py          # TokenCard, WantSpinBox, ToastNotification
+│   ├── icon_map.py         # Centralized icon path mappings
+│   └── theme.py            # Dark blue theme (QSS stylesheet)
 │
 └── assets/
-    └── icon.ico            # Application icon
+    ├── icon.ico            # Application icon
+    ├── icon.png            # Application icon (PNG)
+    └── icons/              # Token, nav, and category icons (from original game)
+        ├── perf/           # Performance token icons (7 files)
+        ├── vis/            # Visual token icons (9 files)
+        ├── pol/            # Police token icons (5 files)
+        ├── nav/            # Sidebar navigation icons (5 files + unknown.png)
+        └── cat/            # Category filter icons (4 files)
 ```
+
+`dev_assets/` (root level) contains developer-only files: original DDS textures, icon prep scripts, and archived legacy code. Not included in releases.
 
 ---
 
@@ -141,5 +161,5 @@ nfs_mw_save_editor/
 
 ## License
 
-This project is provided as-is for educational and personal use.  
+This project is provided as-is for educational and personal use.
 NFS Most Wanted is a trademark of Electronic Arts.

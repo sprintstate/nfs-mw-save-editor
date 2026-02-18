@@ -1,3 +1,15 @@
+﻿"""
+NFS MW 2005 - Junkman Inventory Editor (main window)
+
+The main window only keeps:
+  - header (Open / Save / Fix + file path)
+  - sidebar navigation with icons
+  - QStackedWidget (pages are built here for simplicity)
+  - footer (free slots, Apply, Save)
+  - state coordination (refresh_state, apply, save, etc.)
+
+Token cards are rendered as a grid of TokenCard widgets (see widgets.py).
+"""
 from __future__ import annotations
 
 import json
@@ -7,37 +19,50 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QFrame,
     QCheckBox,
     QFileDialog,
+    QFrame,
+    QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
-    QSpinBox,
+    QSizePolicy,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QSizePolicy,
 )
 
 from core.junkman import JunkmanInventory
 from core.savefile import SaveFile
 from resources import resource_path
+from ui.icon_map import cat_icon_path, nav_icon_path
+from ui.widgets import TokenCard, ToastNotification
 
 
+    # -- Constants -------------------------------------------------------
 CAT_LIST = ["All", "Performance", "Visual", "Police", "Unknown"]
 APP_NAME = "NFS_MW_Junkman_Editor"
 CATALOG_FILENAME = "token_catalog.json"
+SAFE_TYPE_MIN = 1
+SAFE_TYPE_MAX = 22
+PERF_IDS = (1, 2, 3, 4, 5, 6, 7)
+PERF_TOTAL = 7
+DEFAULT_CARDS_PER_ROW = 3
+MAX_CARDS_PER_ROW = 4
 
+
+    # -- Helpers ---------------------------------------------------------
 
 def _appdata_dir() -> Path:
     base = os.getenv("APPDATA")
@@ -76,80 +101,9 @@ class TokenEntry:
     category: str = "Unknown"
 
 
-class WantSpinBox(QSpinBox):
-    def wheelEvent(self, event):
-        # Prevent accidental edits while scrolling
-        event.ignore()
-
-
-class TokenRow(QWidget):
-    def __init__(self, token: TokenEntry, have: int, want: int, max_val: int, on_change, on_rename):
-        super().__init__()
-        self.setObjectName("tokenRow")
-        self.token = token
-        self.on_change = on_change
-        self.on_rename = on_rename
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setFixedHeight(36)
-
-        self.name_edit = QLineEdit(token.name)
-        self.name_edit.setMinimumHeight(28)
-        self.name_edit.setMaximumWidth(440)
-        self.name_edit.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.name_edit.editingFinished.connect(self._handle_rename)
-        layout.addWidget(self.name_edit)
-
-        have_lbl = QLabel(f"Have: {have}")
-        have_lbl.setObjectName("haveLabel")
-        layout.addWidget(have_lbl)
-
-        self.btn_minus = QPushButton("-")
-        self.btn_minus.setObjectName("iconBtn")
-        self.btn_minus.setFixedSize(24, 24)
-        self.btn_minus.clicked.connect(lambda: self._bump(-1))
-
-        self.want_spin = WantSpinBox()
-        self.want_spin.setRange(0, max_val)
-        self.want_spin.setValue(want)
-        self.want_spin.setMinimumHeight(28)
-        self.want_spin.setFixedWidth(64)
-        self.want_spin.valueChanged.connect(self._handle_change)
-
-        self.btn_plus = QPushButton("+")
-        self.btn_plus.setObjectName("iconBtn")
-        self.btn_plus.setFixedSize(24, 24)
-        self.btn_plus.clicked.connect(lambda: self._bump(1))
-
-        layout.addWidget(self.btn_minus)
-        layout.addWidget(self.want_spin)
-        layout.addWidget(self.btn_plus)
-        layout.addStretch(1)
-
-    def _bump(self, delta: int):
-        self.want_spin.setValue(max(self.want_spin.minimum(), min(self.want_spin.maximum(), self.want_spin.value() + delta)))
-
-    def _handle_change(self, val: int):
-        self.on_change(self.token.id, val)
-
-    def _handle_rename(self):
-        new_name = self.name_edit.text().strip() or f"Token #{self.token.id}"
-        self.name_edit.setText(new_name)
-        self.on_rename(self.token.id, new_name)
-
-    def set_max(self, max_val: int):
-        cur = self.want_spin.value()
-        self.want_spin.setRange(0, max_val)
-        self.want_spin.setValue(min(cur, max_val))
-
-    def set_have_want(self, have: int, want: int):
-        have_lbl = self.layout().itemAt(1).widget()
-        have_lbl.setText(f"Have: {have}")
-        self.want_spin.setValue(want)
-
+    # ===================================================================
+#  MAIN WINDOW
+    # ===================================================================
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -158,12 +112,15 @@ class MainWindow(QMainWindow):
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         self.setWindowTitle("NFS MW 2005 - Junkman Inventory (PC v1.3)")
+        self.resize(1180, 720)
 
+    #  state
         self.savefile: Optional[SaveFile] = None
         self.have_counts: Dict[int, int] = {}
         self.want_counts: Dict[int, int] = {}
         self.tokens: List[TokenEntry] = []
         self.safe_mode = True
+        self.practical_cap10 = True
         self.preserve_unknown = True
         self.clear_unknown_next = False
         self.show_only_changed = False
@@ -173,7 +130,42 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self.refresh_state()
 
-    # ---------- Catalog ----------
+    # ================================================================
+    #  CATALOG
+    # ================================================================
+
+    def _normalize_catalog_defaults(self) -> bool:
+        changed = False
+        expected: Dict[int, tuple[str, str]] = {
+            17: ("Out of Jail", "Police"),
+            18: ("Money Marker", "Police"),
+            19: ("PinkSlip Marker", "Police"),
+            20: ("Impound Strike Slot Add", "Police"),
+            21: ("Impound Release", "Police"),
+            22: ("Unknown ID 22 (valid)", "Unknown"),
+        }
+        legacy_names: Dict[int, set[str]] = {
+            18: {"Unknown ID 18", "Imp. Strike?"},
+            19: {"Imp. Release?"},
+            20: {"Imp. Strike"},
+        }
+        idx = {t.id: t for t in self.tokens}
+        for tid, (name, category) in expected.items():
+            tok = idx.get(tid)
+            if tok is None:
+                self.tokens.append(TokenEntry(id=tid, name=name, category=category))
+                changed = True
+                continue
+            if tok.name in legacy_names.get(tid, set()):
+                tok.name = name
+                changed = True
+            if tok.category == "Unknown" and category == "Police":
+                tok.category = category
+                changed = True
+        if changed:
+            self.tokens.sort(key=lambda t: t.id)
+        return changed
+
     def load_catalog(self):
         def from_list(toks):
             return [
@@ -182,8 +174,7 @@ class MainWindow(QMainWindow):
                     name=t.get("name", f"Token #{t.get('id')}"),
                     category=t.get("category", "Unknown"),
                 )
-                for t in toks
-                if "id" in t
+                for t in toks if "id" in t
             ]
 
         def from_dict(obj):
@@ -195,13 +186,11 @@ class MainWindow(QMainWindow):
                     continue
                 if not isinstance(v, dict):
                     v = {}
-                out.append(
-                    TokenEntry(
-                        id=tid,
-                        name=v.get("name", f"Token #{tid}"),
-                        category=v.get("category", "Unknown"),
-                    )
-                )
+                out.append(TokenEntry(
+                    id=tid,
+                    name=v.get("name", f"Token #{tid}"),
+                    category=v.get("category", "Unknown"),
+                ))
             return out
 
         self.tokens = []
@@ -214,30 +203,24 @@ class MainWindow(QMainWindow):
                     self.tokens = from_dict(raw)
             except Exception:
                 self.tokens = []
+
         if not self.tokens:
             defaults = [
-                (1, "Brakes", "Performance"),
-                (2, "Engine", "Performance"),
-                (3, "NOS", "Performance"),
-                (4, "Turbo", "Performance"),
-                (5, "Suspension", "Performance"),
-                (6, "Tires", "Performance"),
-                (7, "Transmission", "Performance"),
-                (8, "Body", "Visual"),
-                (9, "Hood", "Visual"),
-                (10, "Spoiler", "Visual"),
-                (11, "Rims", "Visual"),
-                (12, "Roof", "Visual"),
-                (13, "Gauge", "Visual"),
-                (14, "Vinyl", "Visual"),
-                (15, "Decal", "Visual"),
-                (16, "Paint", "Visual"),
-                (17, "Out of Jail", "Police"),
-                (20, "Imp. Strike", "Police"),
-                (19, "Imp. Release?", "Police"),
-                (18, "Unknown ID 18", "Unknown"),
+                (1, "Brakes", "Performance"), (2, "Engine", "Performance"),
+                (3, "NOS", "Performance"), (4, "Turbo", "Performance"),
+                (5, "Suspension", "Performance"), (6, "Tires", "Performance"),
+                (7, "Transmission", "Performance"), (8, "Body", "Visual"),
+                (9, "Hood", "Visual"), (10, "Spoiler", "Visual"),
+                (11, "Rims", "Visual"), (12, "Roof", "Visual"),
+                (13, "Gauge", "Visual"), (14, "Vinyl", "Visual"),
+                (15, "Decal", "Visual"), (16, "Paint", "Visual"),
+                (17, "Out of Jail", "Police"), (18, "Money Marker", "Police"),
+                (19, "PinkSlip Marker", "Police"), (20, "Impound Strike Slot Add", "Police"),
+                (21, "Impound Release", "Police"), (22, "Unknown ID 22 (valid)", "Unknown"),
             ]
             self.tokens = [TokenEntry(id=i, name=n, category=c) for i, n, c in defaults]
+            self.save_catalog()
+        if self._normalize_catalog_defaults():
             self.save_catalog()
 
     def save_catalog(self):
@@ -251,7 +234,10 @@ class MainWindow(QMainWindow):
         self.tokens.append(TokenEntry(id=tid, name=f"Token #{tid}", category="Unknown"))
         self.tokens.sort(key=lambda t: t.id)
 
-    # ---------- UI build ----------
+    # ================================================================
+    #  BUILD UI
+    # ================================================================
+
     def _build_ui(self):
         root = QWidget()
         self.setCentralWidget(root)
@@ -265,8 +251,7 @@ class MainWindow(QMainWindow):
         body.setSpacing(12)
         base.addLayout(body, 1)
 
-        self.nav = self._build_nav()
-        body.addLayout(self.nav, 0)
+        body.addLayout(self._build_nav(), 0)
 
         self.stack = QStackedWidget()
         body.addWidget(self.stack, 1)
@@ -277,15 +262,22 @@ class MainWindow(QMainWindow):
         self.page_settings = self._build_settings_page()
         self.page_about = self._build_about_page()
 
-        self.stack.addWidget(self.page_junk)
-        self.stack.addWidget(self.page_profile)
-        self.stack.addWidget(self.page_presets)
-        self.stack.addWidget(self.page_settings)
-        self.stack.addWidget(self.page_about)
+        for p in [self.page_junk, self.page_profile, self.page_presets,
+                   self.page_settings, self.page_about]:
+            self.stack.addWidget(p)
 
         self._select_page("Junkman")
-
         base.addLayout(self._build_footer())
+
+        # -- Keyboard shortcuts --
+        QShortcut(QKeySequence("Ctrl+O"), self, activated=self.on_open)
+        QShortcut(QKeySequence("Ctrl+S"), self, activated=self.on_save)
+        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.on_reset_want)
+
+        # -- Drag & drop --
+        self.setAcceptDrops(True)
+
+    # -- Header ----------------------------------------------------------
 
     def _build_header(self):
         row = QHBoxLayout()
@@ -296,6 +288,7 @@ class MainWindow(QMainWindow):
         self.btn_open.clicked.connect(self.on_open)
         self.btn_save_header.clicked.connect(self.on_save)
         self.btn_fix.clicked.connect(self.on_fix_checksums)
+
         self.lbl_file = QLabel("File: (not opened)")
         self.lbl_file.setObjectName("filePath")
         self.lbl_file.setAlignment(Qt.AlignCenter)
@@ -303,42 +296,134 @@ class MainWindow(QMainWindow):
         self.lbl_status.setObjectName("mutedLabel")
         self.lbl_unsaved = QLabel("")
         self.lbl_unsaved.setObjectName("unsavedLabel")
-        row.addWidget(self.btn_open)
-        row.addWidget(self.btn_save_header)
-        row.addWidget(self.btn_fix)
+
+        for w in [self.btn_open, self.btn_save_header, self.btn_fix]:
+            row.addWidget(w)
         row.addStretch(1)
         row.addWidget(self.lbl_file, 1)
         row.addWidget(self.lbl_unsaved)
         row.addWidget(self.lbl_status)
         return row
 
+    @staticmethod
+    def _tight_icon(path: Path, size: QSize) -> QIcon:
+        """Load icon and trim transparent paddings so visual size is consistent."""
+        pix = QPixmap(str(path))
+        if pix.isNull():
+            return QIcon(str(path))
+
+        img = pix.toImage().convertToFormat(QImage.Format_RGBA8888)
+        w, h = img.width(), img.height()
+        min_x, min_y = w, h
+        max_x, max_y = -1, -1
+        for y in range(h):
+            for x in range(w):
+                alpha = (img.pixel(x, y) >> 24) & 0xFF
+                if alpha:
+                    if x < min_x:
+                        min_x = x
+                    if y < min_y:
+                        min_y = y
+                    if x > max_x:
+                        max_x = x
+                    if y > max_y:
+                        max_y = y
+
+        if max_x >= min_x and max_y >= min_y:
+            pix = pix.copy(min_x, min_y, (max_x - min_x + 1), (max_y - min_y + 1))
+        pix = pix.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        return QIcon(pix)
+    # -- Navigation sidebar -----------------------------------------------
+
     def _build_nav(self):
         layout = QVBoxLayout()
-        layout.setSpacing(8)
+        layout.setSpacing(6)
         layout.setAlignment(Qt.AlignTop)
         self.nav_buttons: Dict[str, QPushButton] = {}
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
+
         for name in ["Junkman", "Profile", "Presets", "Settings", "About"]:
             btn = QPushButton(name)
             btn.setObjectName("navButton")
             btn.setCheckable(True)
+            btn.setMinimumHeight(48)
+            btn.setMinimumWidth(130)
+
+            # Load nav icon
+            icon_p = nav_icon_path(name)
+            if icon_p and icon_p.exists():
+                btn.setIcon(self._tight_icon(icon_p, QSize(28, 28)))
+                btn.setIconSize(QSize(28, 28))
+
             btn.clicked.connect(lambda _, n=name: self._select_page(n))
             self.nav_buttons[name] = btn
             self.nav_group.addButton(btn)
             layout.addWidget(btn)
+
         layout.addStretch(1)
         return layout
+
+    # -- Footer ----------------------------------------------------------
+
+    def _build_footer(self):
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.lbl_free = QLabel("Free slots: -/-")
+        self.lbl_free.setObjectName("pillLabel")
+
+        # Progress bar: unlocked tokens
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("tokenProgress")
+        self.progress_bar.setRange(0, PERF_TOTAL)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFixedHeight(18)
+        self.progress_bar.setFixedWidth(160)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("0/7 Performance")
+
+        self.btn_reset_want = QPushButton("Reset Want=Have")
+        self.btn_apply = QPushButton("Apply (memory)")
+        self.btn_save_footer = QPushButton("Save + backup")
+        self.btn_reset_want.clicked.connect(self.on_reset_want)
+        self.btn_apply.clicked.connect(self.on_apply_changes)
+        self.btn_save_footer.clicked.connect(self.on_save)
+        row.addWidget(self.lbl_free)
+        row.addWidget(self.progress_bar)
+        row.addStretch(1)
+        row.addWidget(self.btn_reset_want)
+        row.addWidget(self.btn_apply)
+        row.addWidget(self.btn_save_footer)
+        return row
+
+    # -- Page select -----------------------------------------------------
+
+    def _select_page(self, name: str):
+        for n, btn in self.nav_buttons.items():
+            btn.setChecked(n == name)
+        mapping = {
+            "Junkman": self.page_junk,
+            "Profile": self.page_profile,
+            "Presets": self.page_presets,
+            "Settings": self.page_settings,
+            "About": self.page_about,
+        }
+        self.stack.setCurrentWidget(mapping[name])
+
+    # ================================================================
+    #  JUNKMAN PAGE  (grid of TokenCards)
+    # ================================================================
 
     def _build_junk_page(self):
         w = QWidget()
         layout = QHBoxLayout(w)
         layout.setSpacing(12)
 
-        # left panel (filters/actions)
+    # -- left panel (filters, quick actions) ------------------------------
         left = QVBoxLayout()
         left.setSpacing(8)
         left.setAlignment(Qt.AlignTop)
+
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search tokens...")
         self.search.textChanged.connect(self.refresh_cards)
@@ -348,8 +433,9 @@ class MainWindow(QMainWindow):
         self.chk_show_changed.stateChanged.connect(self.on_toggle_show_changed)
         left.addWidget(self.chk_show_changed)
 
-        cat_row = QVBoxLayout()
-        cat_row.setSpacing(6)
+        # category filter
+        cat_box = QVBoxLayout()
+        cat_box.setSpacing(4)
         self.cat_buttons: Dict[str, QPushButton] = {}
         self.cat_group = QButtonGroup(self)
         self.cat_group.setExclusive(True)
@@ -358,22 +444,28 @@ class MainWindow(QMainWindow):
             btn.setObjectName("catButton")
             btn.setCheckable(True)
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn.setMinimumHeight(30)
+            btn.setMinimumHeight(32)
+            # Category icon
+            c_icon = cat_icon_path(cat)
+            if c_icon:
+                btn.setIcon(self._tight_icon(c_icon, QSize(20, 20)))
+                btn.setIconSize(QSize(20, 20))
             btn.clicked.connect(lambda _, c=cat: self._select_category(c))
             self.cat_buttons[cat] = btn
             self.cat_group.addButton(btn)
-            cat_row.addWidget(btn)
+            cat_box.addWidget(btn)
         self.cat_buttons["All"].setChecked(True)
-        left.addLayout(cat_row)
+        left.addLayout(cat_box)
 
+        # quick actions
         left.addWidget(self._section_label("Quick actions"))
         self.btn_q_perf = QPushButton("Unlock Performance (1-7)")
         self.btn_q_vis = QPushButton("Unlock Visual (8-16)")
-        self.btn_q_all = QPushButton("Unlock All (1-19)")
-        self.btn_q_clear = QPushButton("Clear All (Want=0)")
+        self.btn_q_all = QPushButton("Unlock All (1-22)")
+        self.btn_q_clear = QPushButton("Clear All (Want->0)")
         self.btn_q_perf.clicked.connect(lambda: self._quick_set(range(1, 8), 1))
         self.btn_q_vis.clicked.connect(lambda: self._quick_set(range(8, 17), 1))
-        self.btn_q_all.clicked.connect(lambda: self._quick_set(range(1, 20), 1))
+        self.btn_q_all.clicked.connect(lambda: self._quick_set(range(SAFE_TYPE_MIN, SAFE_TYPE_MAX + 1), 1))
         self.btn_q_clear.clicked.connect(self.on_clear_all_want)
         for b in [self.btn_q_perf, self.btn_q_vis, self.btn_q_all, self.btn_q_clear]:
             left.addWidget(b)
@@ -381,38 +473,81 @@ class MainWindow(QMainWindow):
 
         left_widget = QWidget()
         left_widget.setLayout(left)
-        left_widget.setFixedWidth(260)
+        left_widget.setFixedWidth(220)
         layout.addWidget(left_widget, 0)
 
-        # right panel (cards)
+        # -- right panel: stacked widget (cards vs empty state) --
+        self.right_stack = QStackedWidget()
+        layout.addWidget(self.right_stack, 1)
+
+        # Page 0: card grid inside scroll area
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        container = QWidget()
-        container_layout = QHBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(0)
-        container_layout.setAlignment(Qt.AlignTop)
-        self.cards_holder = QWidget()
-        self.cards_holder.setMaximumWidth(1100)
-        self.cards_holder.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
-        self.cards_layout = QVBoxLayout(self.cards_holder)
-        self.cards_layout.setSpacing(8)
-        self.cards_layout.setContentsMargins(8, 8, 8, 8)
-        self.cards_layout.setAlignment(Qt.AlignTop)
-        container_layout.addStretch(1)
-        container_layout.addWidget(self.cards_holder)
-        container_layout.addStretch(1)
-        self.scroll.setWidget(container)
-        layout.addWidget(self.scroll, 1)
-        self._init_sections()
+        self.scroll.setObjectName("cardScroll")
+
+        self.cards_container = QWidget()
+        self.cards_grid = QGridLayout(self.cards_container)
+        self.cards_grid.setSpacing(12)
+        self.cards_grid.setContentsMargins(8, 8, 8, 8)
+        self.cards_grid.setAlignment(Qt.AlignTop)
+
+        self._cards_per_row = DEFAULT_CARDS_PER_ROW
+        self.cards_container.setFixedWidth(self._card_area_width(self._cards_per_row))
+        self.cards_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+
+        self.cards_host = QWidget()
+        self.cards_host_layout = QVBoxLayout(self.cards_host)
+        self.cards_host_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_host_layout.setSpacing(0)
+        self.cards_host_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.cards_host_layout.addWidget(self.cards_container, 0, Qt.AlignTop | Qt.AlignHCenter)
+
+        self.scroll.setWidget(self.cards_host)
+        self.right_stack.addWidget(self.scroll)           # index 0
+
+        # Page 1: empty state (no file loaded)
+        empty_page = QWidget()
+        empty_page.setObjectName("emptyOverlay")
+        ov_layout = QVBoxLayout(empty_page)
+        ov_layout.setAlignment(Qt.AlignCenter)
+        ov_layout.setSpacing(16)
+
+        ov_icon = QLabel()
+        ov_icon.setAlignment(Qt.AlignCenter)
+        icon_p = resource_path("assets", "icon.png")
+        if icon_p.exists():
+            pix = QPixmap(str(icon_p)).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            ov_icon.setPixmap(pix)
+        ov_layout.addWidget(ov_icon)
+
+        ov_title = QLabel("No save file loaded")
+        ov_title.setObjectName("emptyTitle")
+        ov_title.setAlignment(Qt.AlignCenter)
+        ov_layout.addWidget(ov_title)
+
+        ov_hint = QLabel('Click  "Open save"  to get started')
+        ov_hint.setObjectName("emptyHint")
+        ov_hint.setAlignment(Qt.AlignCenter)
+        ov_layout.addWidget(ov_hint)
+
+        self.right_stack.addWidget(empty_page)            # index 1
+        self.right_stack.setCurrentIndex(1)                # start with empty
+
+        # section headers & empty label
+        self.section_labels: Dict[str, QLabel] = {}
+        self.empty_label = QLabel("No tokens match your filter.")
+        self.empty_label.setObjectName("mutedLabel")
+
         return w
+
+    # -- Other pages -----------------------------------------------------
 
     def _build_profile_page(self):
         w = QWidget()
         layout = QVBoxLayout(w)
+        layout.addWidget(QLabel("Profile / Integrity"))
         self.profile_info = QTextEdit()
         self.profile_info.setReadOnly(True)
-        layout.addWidget(QLabel("Profile / Integrity"))
         layout.addWidget(self.profile_info)
         return w
 
@@ -450,11 +585,21 @@ class MainWindow(QMainWindow):
         self.chk_adv.setChecked(False)
         self.chk_adv.stateChanged.connect(self.on_range_toggle)
 
+        self.chk_practical_cap10 = QCheckBox("Unlock limit (<= 63)")
+        self.chk_practical_cap10.setChecked(False)
+        self.chk_practical_cap10.stateChanged.connect(self.on_practical_cap_toggle)
+
         self.btn_clear_unknown = QPushButton("Clear Unknown (danger)")
         self.btn_clear_unknown.clicked.connect(self.on_clear_unknown_confirm)
 
         self.lbl_limits = QLabel("Limits: -")
         self.lbl_limits.setObjectName("mutedLabel")
+        self.lbl_type_safety = QLabel(
+            f"Safe Type_ID range: {SAFE_TYPE_MIN}-{SAFE_TYPE_MAX}. "
+            "Using IDs outside this range may crash the game."
+        )
+        self.lbl_type_safety.setObjectName("mutedLabel")
+        self.lbl_type_safety.setWordWrap(True)
 
         self.lbl_catalog_path = QLabel(f"Catalog: {self.catalog_path}")
         self.lbl_catalog_path.setObjectName("mutedLabel")
@@ -468,8 +613,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.chk_preserve_unknown)
         layout.addWidget(self.chk_safe)
         layout.addWidget(self.chk_adv)
+        layout.addWidget(self.chk_practical_cap10)
         layout.addWidget(self.btn_clear_unknown)
         layout.addWidget(self.lbl_limits)
+        layout.addWidget(self.lbl_type_safety)
         layout.addLayout(catalog_row)
         layout.addStretch(1)
         return w
@@ -477,91 +624,64 @@ class MainWindow(QMainWindow):
     def _build_about_page(self):
         w = QWidget()
         layout = QVBoxLayout(w)
-        text = QTextEdit()
-        text.setReadOnly(True)
-        text.setText(
-            "Junkman Inventory Editor for NFS MW 2005 PC v1.3\n"
+        layout.setAlignment(Qt.AlignTop)
+        layout.setSpacing(16)
+        layout.setContentsMargins(32, 32, 32, 32)
+
+        # Logo
+        logo_label = QLabel()
+        logo_label.setAlignment(Qt.AlignCenter)
+        logo_path = resource_path("assets", "icon.png")
+        if logo_path.exists():
+            pix = QPixmap(str(logo_path)).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(pix)
+        layout.addWidget(logo_label)
+
+        title = QLabel("NFS MW 2005 — Junkman Inventory Editor")
+        title.setObjectName("aboutTitle")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        ver = QLabel("v1.3  ·  PC")
+        ver.setObjectName("mutedLabel")
+        ver.setAlignment(Qt.AlignCenter)
+        layout.addWidget(ver)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setObjectName("separator")
+        layout.addWidget(sep)
+
+        desc = QLabel(
             "Slot array is auto-detected per save (stride 0x0C).\n"
-            "Apply writes to memory; Save+backup writes to disk."
+            "Apply writes to memory; Save+backup writes to disk.\n\n"
+            "Keyboard shortcuts:\n"
+            "  Ctrl+O  Open save · Ctrl+S  Save+backup · Ctrl+Z  Reset Want\n\n"
+            "Drag & drop .sav files directly onto the window."
         )
-        layout.addWidget(text)
+        desc.setObjectName("mutedLabel")
+        desc.setWordWrap(True)
+        desc.setAlignment(Qt.AlignCenter)
+        layout.addWidget(desc)
+
+        btn_row = QHBoxLayout()
+        btn_row.setAlignment(Qt.AlignCenter)
+        btn_github = QPushButton("GitHub")
+        btn_github.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://github.com/"))
+        )
+        btn_row.addWidget(btn_github)
+        layout.addLayout(btn_row)
+
+        layout.addStretch(1)
         return w
 
-    def _build_footer(self):
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        self.lbl_free = QLabel("Free slots: -/-")
-        self.lbl_free.setObjectName("pillLabel")
-        self.btn_reset_want = QPushButton("Reset Want=Have")
-        self.btn_apply = QPushButton("Apply (memory)")
-        self.btn_save_footer = QPushButton("Save + backup")
-        self.btn_reset_want.clicked.connect(self.on_reset_want)
-        self.btn_apply.clicked.connect(self.on_apply_changes)
-        self.btn_save_footer.clicked.connect(self.on_save)
-        row.addWidget(self.lbl_free)
-        row.addStretch(1)
-        row.addWidget(self.btn_reset_want)
-        row.addWidget(self.btn_apply)
-        row.addWidget(self.btn_save_footer)
-        return row
+    # -- UI helpers ------------------------------------------------------
 
-    # ---------- UI helpers ----------
     def _section_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setObjectName("sectionLabel")
         return lbl
-
-    def _section_header(self, text: str) -> QWidget:
-        wrapper = QWidget()
-        row = QHBoxLayout(wrapper)
-        row.setContentsMargins(0, 6, 0, 2)
-        row.setSpacing(10)
-        lbl = self._section_label(text)
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Plain)
-        line.setObjectName("sectionLine")
-        row.addWidget(lbl)
-        row.addWidget(line, 1)
-        return wrapper
-
-    def _init_sections(self):
-        self.section_widgets: Dict[str, QWidget] = {}
-        self.section_rows: Dict[str, QVBoxLayout] = {}
-        for cat in ["Performance", "Visual", "Police", "Unknown"]:
-            section = QWidget()
-            section.setObjectName("sectionWidget")
-            section.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            v = QVBoxLayout(section)
-            v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(6)
-            v.addWidget(self._section_header(cat))
-
-            rows_container = QWidget()
-            rows_layout = QVBoxLayout(rows_container)
-            rows_layout.setContentsMargins(0, 0, 0, 0)
-            rows_layout.setSpacing(6)
-            v.addWidget(rows_container)
-
-            self.section_widgets[cat] = section
-            self.section_rows[cat] = rows_layout
-            self.cards_layout.addWidget(section)
-
-        self.empty_label = QLabel("No tokens match your filter.")
-        self.empty_label.setObjectName("mutedLabel")
-        self.cards_layout.addWidget(self.empty_label)
-
-    def _select_page(self, name: str):
-        for n, btn in self.nav_buttons.items():
-            btn.setChecked(n == name)
-        mapping = {
-            "Junkman": self.page_junk,
-            "Profile": self.page_profile,
-            "Presets": self.page_presets,
-            "Settings": self.page_settings,
-            "About": self.page_about,
-        }
-        self.stack.setCurrentWidget(mapping[name])
 
     def _select_category(self, cat: str):
         for c, b in self.cat_buttons.items():
@@ -575,6 +695,10 @@ class MainWindow(QMainWindow):
             self.ensure_token_entry(tid)
         self.refresh_cards()
 
+    # ================================================================
+    #  STATE & RENDERING
+    # ================================================================
+
     def _slot_capacity(self) -> int:
         if self.savefile and self.savefile.junkman:
             return self.savefile.junkman.slot_count
@@ -582,29 +706,53 @@ class MainWindow(QMainWindow):
 
     def _current_max(self) -> int:
         cap = self._slot_capacity()
-        if self.safe_mode:
-            return min(63, cap)
-        return min(255, cap)
+        if self.practical_cap10:
+            return min(10, cap)
+        return min(63, cap)
 
     def _unknown_ids(self) -> List[int]:
         return [t.id for t in self.tokens if t.category == "Unknown"]
 
-    # ---------- State & rendering ----------
+    def _card_area_width(self, cols: int) -> int:
+        margins = self.cards_grid.contentsMargins()
+        return (
+            margins.left()
+            + margins.right()
+            + cols * TokenCard.CARD_WIDTH
+            + (cols - 1) * self.cards_grid.spacing()
+        )
+
+    def _detect_cards_per_row(self) -> int:
+        if not hasattr(self, "scroll"):
+            return DEFAULT_CARDS_PER_ROW
+        viewport = self.scroll.viewport()
+        if viewport is None:
+            return getattr(self, "_cards_per_row", DEFAULT_CARDS_PER_ROW)
+        available = max(320, viewport.width() - 8)
+        for cols in range(MAX_CARDS_PER_ROW, 0, -1):
+            if self._card_area_width(cols) <= available:
+                return cols
+        return 1
+
+    def _sync_cards_per_row(self, force: bool = False) -> int:
+        cols = self._detect_cards_per_row()
+        current = getattr(self, "_cards_per_row", DEFAULT_CARDS_PER_ROW)
+        if force or cols != current:
+            self._cards_per_row = cols
+            self.cards_container.setFixedWidth(self._card_area_width(cols))
+        return getattr(self, "_cards_per_row", DEFAULT_CARDS_PER_ROW)
+
     def refresh_state(self):
         loaded = self.savefile is not None
+
+        # Toggle empty state vs cards
+        self.right_stack.setCurrentIndex(0 if loaded else 1)
+
         for btn in [
-            self.btn_save_header,
-            self.btn_save_footer,
-            self.btn_fix,
-            self.btn_apply,
-            self.btn_reset_want,
-            self.btn_q_perf,
-            self.btn_q_vis,
-            self.btn_q_all,
-            self.btn_q_clear,
-            self.btn_load_preset,
-            self.btn_save_preset,
-            self.btn_export_have,
+            self.btn_save_header, self.btn_save_footer, self.btn_fix,
+            self.btn_apply, self.btn_reset_want,
+            self.btn_q_perf, self.btn_q_vis, self.btn_q_all, self.btn_q_clear,
+            self.btn_load_preset, self.btn_save_preset, self.btn_export_have,
             self.btn_clear_unknown,
         ]:
             btn.setEnabled(loaded)
@@ -612,18 +760,17 @@ class MainWindow(QMainWindow):
         if loaded:
             self.lbl_file.setText(f"File: {self.savefile.path}")
             integrity = self.savefile.validate_integrity()
-            status = []
+            parts = []
             if integrity.md5_ok is True:
-                status.append("MD5 OK")
+                parts.append("MD5 OK")
             elif integrity.md5_ok is False:
-                status.append("MD5 BAD")
-            if integrity.crc_block1_ok:
-                status.append("CRC1 OK")
-            if integrity.crc_data_ok:
-                status.append("CRCdata OK")
-            if integrity.crc_block2_ok:
-                status.append("CRC2 OK")
-            self.lbl_status.setText("Status: " + ", ".join(status) if status else "Status: -")
+                parts.append("MD5 BAD")
+            for name, ok in [("CRC1", integrity.crc_block1_ok),
+                             ("CRCdata", integrity.crc_data_ok),
+                             ("CRC2", integrity.crc_block2_ok)]:
+                if ok:
+                    parts.append(f"{name} OK")
+            self.lbl_status.setText("Status: " + ", ".join(parts) if parts else "Status: -")
             self.profile_info.setText(
                 f"Hash scheme: {integrity.hash_scheme}\n"
                 f"File size ok: {integrity.file_size_ok} ({integrity.actual_size})\n"
@@ -647,17 +794,21 @@ class MainWindow(QMainWindow):
         )
         self.refresh_cards()
 
+    # -- Card grid rendering ---------------------------------------------
+
     def refresh_cards(self):
-        for cat, layout in self.section_rows.items():
-            while layout.count():
-                item = layout.takeAt(0)
-                w = item.widget()
-                if w:
-                    w.deleteLater()
+        """Rebuild the entire card grid."""
+        # Clear everything from the grid
+        while self.cards_grid.count():
+            item = self.cards_grid.takeAt(0)
+            w = item.widget()
+            if w and w is not self.empty_label:
+                w.deleteLater()
 
         term = self.search.text().lower() if self.search else ""
         active_cat = next((c for c, b in self.cat_buttons.items() if b.isChecked()), "All")
         max_val = self._current_max()
+        cards_per_row = self._sync_cards_per_row(force=True)
 
         def matches(tok: TokenEntry) -> bool:
             if active_cat != "All" and tok.category != active_cat:
@@ -671,39 +822,89 @@ class MainWindow(QMainWindow):
                     return False
             return True
 
+        grid_row = 0
+        grid_col = 0
         any_added = False
+
         for cat in ["Performance", "Visual", "Police", "Unknown"]:
             toks = [t for t in self.tokens if t.category == cat and matches(t)]
-            show_section = (active_cat == "All" or active_cat == cat) and bool(toks)
-            self.section_widgets[cat].setVisible(show_section)
-            if not show_section:
+            if not toks:
                 continue
+
+            # Section header (spans full row)
+            if grid_col != 0:
+                grid_row += 1
+                grid_col = 0
+
+            header = self._section_label(cat)
+            header.setObjectName("gridSectionLabel")
+            self.cards_grid.addWidget(header, grid_row, 0, 1, cards_per_row)
+            grid_row += 1
+            grid_col = 0
             any_added = True
+
             for t in toks:
                 have = self.have_counts.get(t.id, 0)
                 want = self.want_counts.get(t.id, have)
-                row = TokenRow(
-                    token=t,
+                card = TokenCard(
+                    token_id=t.id,
+                    name=t.name,
                     have=have,
                     want=want,
                     max_val=max_val,
                     on_change=self.on_want_changed,
                     on_rename=self.on_token_renamed,
                 )
-                row.setProperty("changed", want != have)
-                row.style().unpolish(row)
-                row.style().polish(row)
-                self.section_rows[cat].addWidget(row)
+                self.cards_grid.addWidget(card, grid_row, grid_col)
+                self._fade_in_card(card, delay_ms=grid_col * 30)
+                grid_col += 1
+                if grid_col >= cards_per_row:
+                    grid_col = 0
+                    grid_row += 1
 
-        self.empty_label.setVisible(not any_added)
+            # Move to next row after category
+            if grid_col != 0:
+                grid_row += 1
+                grid_col = 0
+
+        if not any_added:
+            self.empty_label.setParent(None)
+            self.cards_grid.addWidget(self.empty_label, 0, 0, 1, cards_per_row)
+            self.empty_label.setVisible(True)
+        else:
+            self.empty_label.setVisible(False)
+
         self._update_free_label()
         self._update_action_states()
 
-    def _update_free_label(self):
+    # -- Status helpers --------------------------------------------------
+
+    def _projected_slot_usage(self) -> tuple[int, int, int]:
+        """Return (used, free, cap) for current preview state (Want)."""
         cap = self._slot_capacity()
-        used = sum(self.have_counts.values())
-        free = max(0, cap - used)
-        self.lbl_free.setText(f"Free slots: {free}/{cap}")
+        want_full = self._build_want_full() if self.savefile else {}
+        used = sum(want_full.values()) if self.savefile else sum(self.have_counts.values())
+        free = cap - used
+        return used, free, cap
+
+    def _projected_perf_unlocked_count(self) -> int:
+        """Return realtime unlocked coverage for performance IDs (1..7)."""
+        mapping = self._build_want_full() if self.savefile else self.have_counts
+        return sum(1 for tid in PERF_IDS if mapping.get(tid, 0) > 0)
+
+    def _update_free_label(self):
+        _used, free, cap = self._projected_slot_usage()
+        if free < 0:
+            self.lbl_free.setText(f"Free slots: 0/{cap} (over by {abs(free)})")
+        else:
+            self.lbl_free.setText(f"Free slots: {free}/{cap}")
+
+        # Update progress bar — realtime performance coverage (IDs 1..7)
+        perf_unlocked = self._projected_perf_unlocked_count()
+        self.progress_bar.setRange(0, PERF_TOTAL)
+        self.progress_bar.setValue(perf_unlocked)
+        self.progress_bar.setFormat(f"{perf_unlocked}/{PERF_TOTAL} Performance")
+
         self._update_header_path()
 
     def _has_pending_changes(self) -> bool:
@@ -712,19 +913,14 @@ class MainWindow(QMainWindow):
             want = self.want_counts.get(tid, have)
             if want != have:
                 return True
-        if self.clear_unknown_next:
-            return True
-        return False
+        return self.clear_unknown_next
 
     def _update_action_states(self):
         pending = self._has_pending_changes()
         enabled = self.savefile is not None
         self.btn_apply.setEnabled(enabled and pending)
         self.btn_reset_want.setEnabled(enabled)
-        if pending:
-            self.lbl_unsaved.setText("● Unsaved changes")
-        else:
-            self.lbl_unsaved.setText("")
+        self.lbl_unsaved.setText("\u25cf Unsaved changes" if pending else "")
 
     def _update_header_path(self):
         text = "File: (not opened)" if not self.savefile else f"{self.savefile.path}"
@@ -735,8 +931,54 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_header_path()
+        if hasattr(self, "scroll") and hasattr(self, "cards_container"):
+            prev = getattr(self, "_cards_per_row", DEFAULT_CARDS_PER_ROW)
+            now = self._detect_cards_per_row()
+            if now != prev:
+                self._cards_per_row = now
+                self.cards_container.setFixedWidth(self._card_area_width(now))
+                self.refresh_cards()
+            else:
+                self.cards_container.setFixedWidth(self._card_area_width(prev))
 
-    # ---------- Events ----------
+    # -- Drag & drop ------------------------------------------------
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            path = urls[0].toLocalFile()
+            if path:
+                self.on_open(filepath=path)
+        event.acceptProposedAction()
+
+    # -- Card fade-in animation -------------------------------------
+
+    @staticmethod
+    def _fade_in_card(card: TokenCard, delay_ms: int = 0):
+        """Animate a card appearing with a quick opacity fade."""
+        eff = QGraphicsOpacityEffect(card)
+        eff.setOpacity(0.0)
+        card.setGraphicsEffect(eff)
+        anim = QPropertyAnimation(eff, b"opacity", card)
+        anim.setDuration(250)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        # Remove the effect after animation so scrolling doesn't glitch
+        anim.finished.connect(lambda: card.setGraphicsEffect(None))
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(delay_ms, anim.start)
+
+    # ================================================================
+    #  EVENTS
+    # ================================================================
+
     def on_token_renamed(self, tid: int, new_name: str):
         for t in self.tokens:
             if t.id == tid:
@@ -746,18 +988,18 @@ class MainWindow(QMainWindow):
         self.refresh_cards()
 
     def on_want_changed(self, tid: int, val: int):
+        have = self.have_counts.get(tid, 0)
+        prev = self.want_counts.get(tid, have)
         self.want_counts[tid] = val
         if self.show_only_changed:
-            self.refresh_cards()
+            # Rebuild only when the row should appear/disappear.
+            if (prev == have) != (val == have):
+                self.refresh_cards()
+            else:
+                self._update_free_label()
+                self._update_action_states()
             return
-        # update row highlight without full refresh
-        sender = self.sender()
-        if sender is not None and hasattr(sender, "parent"):
-            row = sender.parent()
-            have = self.have_counts.get(tid, 0)
-            row.setProperty("changed", val != have)
-            row.style().unpolish(row)
-            row.style().polish(row)
+        self._update_free_label()
         self._update_action_states()
 
     def on_range_toggle(self):
@@ -772,6 +1014,11 @@ class MainWindow(QMainWindow):
             self.safe_mode = True
         self.refresh_cards()
 
+    def on_practical_cap_toggle(self):
+        # Default mode is practical cap <=10. Checked means unlock up to <=63.
+        self.practical_cap10 = not self.chk_practical_cap10.isChecked()
+        self.refresh_cards()
+
     def on_preserve_toggle(self):
         self.preserve_unknown = self.chk_preserve_unknown.isChecked()
 
@@ -783,8 +1030,7 @@ class MainWindow(QMainWindow):
         if not self.savefile:
             return
         res = QMessageBox.warning(
-            self,
-            "Clear Unknown",
+            self, "Clear Unknown",
             "This will clear all Unknown-category tokens on next Apply.\nContinue?",
             QMessageBox.Yes | QMessageBox.No,
         )
@@ -802,7 +1048,8 @@ class MainWindow(QMainWindow):
         self.want_counts = {t.id: 0 for t in self.tokens}
         self.refresh_cards()
 
-    # ---------- Apply ----------
+    # -- Apply -----------------------------------------------------------
+
     def _build_want_full(self) -> Dict[int, int]:
         mapping: Dict[int, int] = {}
         max_val = self._current_max()
@@ -838,20 +1085,31 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No save", "Open a save first.")
             return
         want_full = self._build_want_full()
+        unsafe_added = sorted(
+            tid for tid, qty in want_full.items()
+            if qty > self.have_counts.get(tid, 0) and not (SAFE_TYPE_MIN <= tid <= SAFE_TYPE_MAX)
+        )
+        if unsafe_added:
+            ids = ", ".join(str(t) for t in unsafe_added)
+            res = QMessageBox.warning(
+                self, "Unsafe Type_ID",
+                f"Type_ID(s) outside safe range {SAFE_TYPE_MIN}-{SAFE_TYPE_MAX}: {ids}\n"
+                "These values may crash the game. Continue anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if res != QMessageBox.Yes:
+                return
         needed = sum(want_full.values())
         cap = self._slot_capacity()
         if needed > cap:
             QMessageBox.warning(
-                self,
-                "Not enough slots",
-                f"Need {needed} slots, have {cap}.\n"
-                "Reduce Want values or clear a category.",
+                self, "Not enough slots",
+                f"Need {needed} slots, have {cap}.\nReduce Want values or clear a category.",
             )
             return
         summary = self._summary_text(want_full)
         res = QMessageBox.question(
-            self,
-            "Apply changes?",
+            self, "Apply changes?",
             summary + "\n\nApply changes to loaded save (memory only)?",
             QMessageBox.Yes | QMessageBox.No,
         )
@@ -863,11 +1121,12 @@ class MainWindow(QMainWindow):
             self.want_counts = dict(self.have_counts)
             self.clear_unknown_next = False
             self.refresh_cards()
-            QMessageBox.information(self, "Applied", "Changes applied in memory. Use Save+backup to persist.")
+            ToastNotification.show_toast(self, "Changes applied in memory")
         except Exception as e:
             QMessageBox.critical(self, "Apply failed", str(e))
 
-    # ---------- Presets ----------
+    # -- Presets ---------------------------------------------------------
+
     def on_load_preset(self):
         if not self.savefile:
             QMessageBox.warning(self, "No save", "Open a save first.")
@@ -878,11 +1137,27 @@ class MainWindow(QMainWindow):
         try:
             obj = json.loads(Path(path).read_text(encoding="utf-8"))
             counts_obj = obj.get("counts", obj)
-            counts = {int(k): int(v) for k, v in counts_obj.items() if int(v) >= 0}
+            counts: Dict[int, int] = {}
+            rejected: List[int] = []
+            for k, v in counts_obj.items():
+                tid = int(k)
+                qty = int(v)
+                if qty < 0:
+                    continue
+                if tid < SAFE_TYPE_MIN or tid > SAFE_TYPE_MAX:
+                    rejected.append(tid)
+                    continue
+                counts[tid] = qty
             for tid in counts:
                 self.ensure_token_entry(tid)
             self.want_counts.update(counts)
             self.refresh_cards()
+            if rejected:
+                uniq = ", ".join(str(t) for t in sorted(set(rejected)))
+                QMessageBox.warning(
+                    self, "Preset IDs skipped",
+                    f"Skipped unsafe Type_ID(s): {uniq}\nAllowed range: {SAFE_TYPE_MIN}-{SAFE_TYPE_MAX}.",
+                )
         except Exception as e:
             QMessageBox.critical(self, "Load failed", str(e))
 
@@ -890,25 +1165,30 @@ class MainWindow(QMainWindow):
         if not self.savefile:
             QMessageBox.warning(self, "No save", "Open a save first.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save preset", str(Path.home() / "junkman_preset.json"), "JSON (*.json)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save preset", str(Path.home() / "junkman_preset.json"), "JSON (*.json)"
+        )
         if not path:
             return
         payload = {"counts": self.want_counts}
         Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        QMessageBox.information(self, "Saved", f"Preset saved to {path}")
+        ToastNotification.show_toast(self, "Preset saved")
 
     def on_export_have(self):
         if not self.savefile:
             QMessageBox.warning(self, "No save", "Open a save first.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Export Have", str(Path.home() / "junkman_have.json"), "JSON (*.json)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Have", str(Path.home() / "junkman_have.json"), "JSON (*.json)"
+        )
         if not path:
             return
         payload = {"counts": self.have_counts}
         Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        QMessageBox.information(self, "Exported", f"Have exported to {path}")
+        ToastNotification.show_toast(self, "Have exported")
 
-    # ---------- File ops ----------
+    # -- File operations --------------------------------------------------
+
     def on_open_catalog_folder(self):
         folder = self.catalog_path.parent
         opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
@@ -918,14 +1198,17 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def on_open(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open save", str(Path.home()), "All files (*.*)")
+    def on_open(self, filepath: str | None = None):
+        path = filepath
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Open save", str(Path.home()), "All files (*.*)")
         if not path:
             return
         try:
             self.savefile = SaveFile.load(path)
             self.want_counts = {}
             self.refresh_state()
+            ToastNotification.show_toast(self, "Save loaded")
         except Exception as e:
             QMessageBox.critical(self, "Open failed", str(e))
 
@@ -935,7 +1218,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.savefile.save(make_backup=True)
-            QMessageBox.information(self, "Saved", "Backup created and file saved.")
+            ToastNotification.show_toast(self, "Saved with backup")
         except Exception as e:
             QMessageBox.critical(self, "Save failed", str(e))
 
@@ -944,9 +1227,34 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No file", "Open a save first.")
             return
         status = self.savefile.fix_integrity()
-        QMessageBox.information(self, "Checksums", f"Fixed. Scheme={status.hash_scheme}")
+        ToastNotification.show_toast(self, f"Checksums fixed ({status.hash_scheme})")
         self.refresh_state()
 
 
+    # ===================================================================
+
 def build_window() -> MainWindow:
     return MainWindow()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

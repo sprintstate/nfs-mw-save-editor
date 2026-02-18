@@ -86,18 +86,28 @@
       "category": "Police"
     },
     {
-      "id": 20,
-      "name": "Imp. Strike",
+      "id": 18,
+      "name": "Money Marker",
       "category": "Police"
     },
     {
       "id": 19,
-      "name": "Imp. Release?",
+      "name": "PinkSlip Marker",
       "category": "Police"
     },
     {
-      "id": 18,
-      "name": "Unknown ID 18",
+      "id": 20,
+      "name": "Impound Strike Slot Add",
+      "category": "Police"
+    },
+    {
+      "id": 21,
+      "name": "Impound Release",
+      "category": "Police"
+    },
+    {
+      "id": 22,
+      "name": "Unknown ID 22 (valid)",
       "category": "Unknown"
     }
   ]
