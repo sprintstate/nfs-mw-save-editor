@@ -1,7 +1,7 @@
 # NFS Most Wanted 2005 — Save Editor
 
 Desktop save editor for **Need for Speed: Most Wanted (2005)** on PC (v1.3).
-Built with **Python 3** and **PySide6**. Dark blue UI theme with original game icons.
+Built with **Python 3** and **PySide6**. Dark blue UI theme.
 
 ---
 
@@ -58,7 +58,7 @@ Built with **Python 3** and **PySide6**. Dark blue UI theme with original game i
 
 ```bash
 # Clone the repo
-git clone https://github.com/<sprintstate>/nfs-mw-save-editor.git
+git clone https://github.com/sprintstate/nfs-mw-save-editor.git
 cd nfs-mw-save-editor/nfs_mw_save_editor
 
 # Create virtual environment
