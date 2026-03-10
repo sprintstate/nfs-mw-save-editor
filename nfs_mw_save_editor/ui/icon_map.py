@@ -87,3 +87,11 @@ def cat_icon_path(category: str) -> Optional[Path]:
 
 
 
+def car_display_name(car_id: int) -> str:
+    """Return a display label for the given car_id.
+
+    Car ID -> real car name mapping is not yet verified against save data,
+    so we show the raw hex ID for now.  Replace with a confirmed dict later.
+    """
+    return f"Car ID: 0x{car_id:02X}"
+

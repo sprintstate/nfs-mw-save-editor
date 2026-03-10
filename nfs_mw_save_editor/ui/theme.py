@@ -312,6 +312,110 @@ QLabel#toastError {{
     font-weight: 600;
 }}
 
+/* Stat Tiles (Profile summary strip) */
+QFrame#statTile {{
+    background: {BG_CARD};
+    border: 1px solid {BORDER};
+    border-radius: 12px;
+    padding: 0px;
+}}
+QLabel#statTileHeading {{
+    background: #0F1524;
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 3px 8px;
+    color: {MUTED};
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}}
+QLabel#statTileValue {{
+    color: {ACCENT_BRIGHT};
+    font-size: 18px;
+    font-weight: 700;
+}}
+QLineEdit#statTileEdit {{
+    background: #0F1524;
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 16px;
+    font-weight: 700;
+    color: {TEXT};
+}}
+QLabel#statTileSub {{
+    background: #0F1524;
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 3px 8px;
+    color: {MUTED};
+    font-size: 10.5px;
+}}
+
+/* Garage Car Cards */
+QFrame#garageCard {{
+    background: {BG_CARD};
+    border: 1px solid {BORDER};
+    border-radius: 12px;
+}}
+QFrame#garageCard[changed="true"] {{
+    border: 1px solid #4A678E;
+    background: rgba(74, 107, 148, 0.12);
+}}
+QFrame#garageCard[occupied="false"] {{
+    opacity: 0.6;
+}}
+QLabel#garageCardSlot {{
+    background: #0F1524;
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 3px 8px;
+    color: {MUTED};
+    font-size: 10.5px;
+    font-weight: 600;
+}}
+QLabel#garageCardMeta {{
+    background: #0F1524;
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 4px 9px;
+    color: {TEXT};
+    font-size: 12px;
+    font-weight: 700;
+}}
+QLabel#garageCardFieldLabel {{
+    background: transparent;
+    color: {MUTED};
+    font-size: 10.5px;
+    font-weight: 600;
+}}
+QFrame#garageCardSep {{
+    color: {BORDER};
+}}
+QLineEdit#garageCardEdit {{
+    background: #0F1524;
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 5px 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: {TEXT};
+}}
+QLabel#garageCardCurrent {{
+    background: transparent;
+    color: {MUTED};
+    font-size: 10.5px;
+}}
+QLabel#garageCardStatBadge {{
+    background: #0F1524;
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 3px 8px;
+    color: {MUTED};
+    font-size: 11px;
+    font-weight: 600;
+}}
+
 /* About Page */
 QLabel#aboutTitle {{
     color: {TEXT};
