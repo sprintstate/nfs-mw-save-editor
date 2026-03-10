@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRegularExpression, QSize, Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon, QImage, QKeySequence, QPixmap, QRegularExpressionValidator, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.junkman import JunkmanInventory
-from core.savefile import SaveFile
+from core.savefile import GarageSlot, SaveFile
 from resources import resource_path
 from ui.icon_map import cat_icon_path, nav_icon_path
 from ui.widgets import TokenCard, ToastNotification
@@ -60,6 +60,10 @@ PERF_IDS = (1, 2, 3, 4, 5, 6, 7)
 PERF_TOTAL = 7
 DEFAULT_CARDS_PER_ROW = 3
 MAX_CARDS_PER_ROW = 4
+U32_MAX = 0xFFFFFFFF
+PROFILE_SIDEBAR_WIDTH = 360
+GARAGE_TILE_MIN_WIDTH = 230
+GARAGE_TILE_MAX_COLUMNS = 3
 
 
     # -- Helpers ---------------------------------------------------------
@@ -118,12 +122,22 @@ class MainWindow(QMainWindow):
         self.savefile: Optional[SaveFile] = None
         self.have_counts: Dict[int, int] = {}
         self.want_counts: Dict[int, int] = {}
+        self.have_money = 0
+        self.want_money: Optional[int] = None
+        self.garage_slots: List[GarageSlot] = []
+        self.have_slot_bounties: Dict[int, int] = {}
+        self.want_slot_bounties: Optional[Dict[int, int]] = None
+        self.garage_detection_error: Optional[str] = None
+        self.show_all_garage_slots = False
+        self.show_integrity_panel = False
         self.tokens: List[TokenEntry] = []
         self.safe_mode = True
         self.practical_cap10 = True
         self.preserve_unknown = True
         self.clear_unknown_next = False
         self.show_only_changed = False
+        self._profile_refreshing = False
+        self._garage_slot_columns = 0
 
         self.catalog_path = _ensure_user_catalog_path()
         self.load_catalog()
@@ -422,6 +436,11 @@ class MainWindow(QMainWindow):
             "About": self.page_about,
         }
         self.stack.setCurrentWidget(mapping[name])
+        if name == "Junkman" and hasattr(self, "cards_container") and hasattr(self, "lbl_free"):
+            self._sync_cards_per_row(force=True)
+            self.refresh_cards()
+        elif name == "Profile":
+            self._maybe_reflow_garage_rows(force=True)
 
     # ================================================================
     #  JUNKMAN PAGE  (grid of TokenCards)
@@ -557,10 +576,80 @@ class MainWindow(QMainWindow):
     def _build_profile_page(self):
         w = QWidget()
         layout = QVBoxLayout(w)
+        layout.setContentsMargins(10, 6, 10, 8)
+        layout.setSpacing(14)
         layout.addWidget(QLabel("Profile / Integrity"))
+
+        self._profile_number_validator = QRegularExpressionValidator(QRegularExpression(r"[0-9, ]*"), self)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(22)
+
+        left_panel = QFrame()
+        left_panel.setObjectName("profileSummaryPanel")
+        left_panel.setFixedWidth(PROFILE_SIDEBAR_WIDTH)
+        left_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(8, 6, 14, 10)
+        left_layout.setSpacing(14)
+        left_layout.setAlignment(Qt.AlignTop)
+
+        left_layout.addWidget(self._section_label("Economy"))
+        self.profile_hint = QLabel(
+            "Money and garage slot bounty values are staged until you click Apply (memory). "
+            "Total Bounty / Rating is computed from the detected garage block."
+        )
+        self.profile_hint.setObjectName("mutedLabel")
+        self.profile_hint.setWordWrap(True)
+        left_layout.addWidget(self.profile_hint)
+
+        left_layout.addWidget(self._build_profile_edit_row("Money"))
+        left_layout.addWidget(self._build_profile_display_row("Total Bounty / Rating", "total_bounty"))
+        left_layout.addWidget(self._build_profile_display_row("Escaped Pursuits", "escaped"))
+        left_layout.addWidget(self._build_profile_display_row("Busted Pursuits", "busted"))
+        left_layout.addStretch(1)
+
+        right_panel = QFrame()
+        right_panel.setObjectName("profileGaragePanel")
+        right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(10, 6, 12, 10)
+        right_layout.setSpacing(12)
+        right_layout.setAlignment(Qt.AlignTop)
+        right_layout.addWidget(self._section_label("Garage Slot Bounty"))
+
+        self.garage_rows = QWidget()
+        self.garage_rows.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.garage_rows_layout = QGridLayout(self.garage_rows)
+        self.garage_rows_layout.setContentsMargins(10, 10, 24, 12)
+        self.garage_rows_layout.setHorizontalSpacing(22)
+        self.garage_rows_layout.setVerticalSpacing(16)
+        self.garage_rows_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
+        self.garage_rows_scroll = QScrollArea()
+        self.garage_rows_scroll.setObjectName("garageRowsScroll")
+        self.garage_rows_scroll.setWidgetResizable(True)
+        self.garage_rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.garage_rows_scroll.setWidget(self.garage_rows)
+        self.garage_rows_scroll.setMinimumHeight(260)
+        right_layout.addWidget(self.garage_rows_scroll, 1)
+
+        top_row.addWidget(left_panel, 0)
+        top_row.addWidget(right_panel, 1)
+        layout.addLayout(top_row, 1)
+
+        self.integrity_section_label = self._section_label("Integrity")
+        layout.addWidget(self.integrity_section_label)
         self.profile_info = QTextEdit()
         self.profile_info.setReadOnly(True)
+        self.profile_info.setMinimumHeight(140)
+        self.profile_info.setMaximumHeight(180)
+        self.profile_info.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout.addWidget(self.profile_info)
+        self.garage_slot_edits: Dict[int, QLineEdit] = {}
+        self.garage_slot_current_labels: Dict[int, QLabel] = {}
+        self._rebuild_garage_slot_rows()
+        self._sync_integrity_visibility()
         return w
 
     def _build_presets_page(self):
@@ -601,6 +690,14 @@ class MainWindow(QMainWindow):
         self.chk_practical_cap10.setChecked(False)
         self.chk_practical_cap10.stateChanged.connect(self.on_practical_cap_toggle)
 
+        self.chk_show_all_garage_slots = QCheckBox("Show empty valid garage slots")
+        self.chk_show_all_garage_slots.setChecked(False)
+        self.chk_show_all_garage_slots.stateChanged.connect(self.on_toggle_show_all_garage_slots)
+
+        self.chk_show_integrity = QCheckBox("Show Integrity panel on Profile")
+        self.chk_show_integrity.setChecked(False)
+        self.chk_show_integrity.stateChanged.connect(self.on_toggle_show_integrity)
+
         self.btn_clear_unknown = QPushButton("Clear Unknown (danger)")
         self.btn_clear_unknown.clicked.connect(self.on_clear_unknown_confirm)
 
@@ -626,6 +723,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.chk_safe)
         layout.addWidget(self.chk_adv)
         layout.addWidget(self.chk_practical_cap10)
+        layout.addWidget(self.chk_show_all_garage_slots)
+        layout.addWidget(self.chk_show_integrity)
         layout.addWidget(self.btn_clear_unknown)
         layout.addWidget(self.lbl_limits)
         layout.addWidget(self.lbl_type_safety)
@@ -640,7 +739,6 @@ class MainWindow(QMainWindow):
         layout.setSpacing(16)
         layout.setContentsMargins(32, 32, 32, 32)
 
-        # Logo
         logo_label = QLabel()
         logo_label.setAlignment(Qt.AlignCenter)
         pix = self._brand_pixmap(80)
@@ -657,6 +755,11 @@ class MainWindow(QMainWindow):
         ver.setObjectName("mutedLabel")
         ver.setAlignment(Qt.AlignCenter)
         layout.addWidget(ver)
+
+        author = QLabel("Created by sprintstate")
+        author.setObjectName("mutedLabel")
+        author.setAlignment(Qt.AlignCenter)
+        layout.addWidget(author)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -679,7 +782,7 @@ class MainWindow(QMainWindow):
         btn_row.setAlignment(Qt.AlignCenter)
         btn_github = QPushButton("GitHub")
         btn_github.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl("https://github.com/"))
+            lambda: QDesktopServices.openUrl(QUrl("https://github.com/sprintstate/nfs-mw-save-editor"))
         )
         btn_row.addWidget(btn_github)
         layout.addLayout(btn_row)
@@ -693,6 +796,345 @@ class MainWindow(QMainWindow):
         lbl = QLabel(text)
         lbl.setObjectName("sectionLabel")
         return lbl
+
+    @staticmethod
+    def _format_u32(value: int) -> str:
+        return str(int(value))
+
+    @staticmethod
+    def _clear_layout(layout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if widget is not None:
+                widget.deleteLater()
+            elif child_layout is not None:
+                MainWindow._clear_layout(child_layout)
+
+    def _parse_u32_text(self, raw: str) -> int:
+        text = raw.replace(",", "").replace(" ", "").strip()
+        if not text:
+            raise ValueError("Value cannot be empty.")
+        if not text.isdigit():
+            raise ValueError("Only decimal digits are allowed.")
+        value = int(text)
+        if value > U32_MAX:
+            raise ValueError(f"Value must be between 0 and {U32_MAX}.")
+        return value
+
+    @staticmethod
+    def _format_current_value(value: int) -> str:
+        return f"Current: {value}"
+
+    def _build_profile_edit_row(self, label_text: str) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        label = QLabel(label_text)
+        label.setMinimumWidth(140)
+
+        edit = QLineEdit()
+        edit.setPlaceholderText("0")
+        edit.setMaximumWidth(220)
+        edit.setValidator(self._profile_number_validator)
+
+        current = QLabel("Current: -")
+        current.setObjectName("mutedLabel")
+
+        edit.editingFinished.connect(self.on_money_edit_finished)
+        self.money_edit = edit
+        self.money_current_label = current
+
+        layout.addWidget(label)
+        layout.addWidget(edit)
+        layout.addWidget(current)
+        layout.addStretch(1)
+        return row
+
+    def _build_profile_display_row(self, label_text: str, field_key: str) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        label = QLabel(label_text)
+        label.setMinimumWidth(140)
+
+        value = QLabel("-")
+        value.setObjectName("pillLabel")
+        current = QLabel("Current: -")
+        current.setObjectName("mutedLabel")
+
+        if field_key == "total_bounty":
+            self.total_bounty_label = value
+            self.total_bounty_current_label = current
+        elif field_key == "escaped":
+            self.escaped_total_label = value
+            self.escaped_total_current_label = current
+        else:
+            self.busted_total_label = value
+            self.busted_total_current_label = current
+
+        layout.addWidget(label)
+        layout.addWidget(value)
+        layout.addWidget(current)
+        layout.addStretch(1)
+        return row
+
+    def _visible_garage_slots(self) -> List[GarageSlot]:
+        if self.show_all_garage_slots:
+            return list(self.garage_slots)
+        return [slot for slot in self.garage_slots if slot.occupied]
+
+    def _detect_garage_slot_columns(self) -> int:
+        if not hasattr(self, "garage_rows_scroll"):
+            return 1
+        viewport = self.garage_rows_scroll.viewport()
+        if viewport is None:
+            return 1
+        available = max(240, viewport.width() - 44)
+        if available >= 1280:
+            return 3
+        if available >= 760:
+            return 2
+        return 1
+
+    def _maybe_reflow_garage_rows(self, force: bool = False) -> None:
+        if not hasattr(self, "garage_rows_scroll"):
+            return
+        cols = self._detect_garage_slot_columns()
+        if force or cols != self._garage_slot_columns:
+            self._garage_slot_columns = cols
+            self._rebuild_garage_slot_rows()
+            if self.savefile is not None:
+                self._refresh_profile_inputs()
+
+    def _sync_integrity_visibility(self) -> None:
+        visible = bool(self.show_integrity_panel)
+        if hasattr(self, "integrity_section_label"):
+            self.integrity_section_label.setVisible(visible)
+        if hasattr(self, "profile_info"):
+            self.profile_info.setVisible(visible)
+
+    def _rebuild_garage_slot_rows(self) -> None:
+        self._clear_layout(self.garage_rows_layout)
+        self.garage_slot_edits = {}
+        self.garage_slot_current_labels = {}
+        columns = max(1, self._detect_garage_slot_columns())
+        self._garage_slot_columns = columns
+
+        if not self.savefile:
+            label = QLabel("Open a save to inspect car bounty data.")
+            label.setObjectName("mutedLabel")
+            self.garage_rows_layout.addWidget(label, 0, 0, 1, columns)
+            return
+
+        if self.garage_detection_error:
+            label = QLabel(f"Garage bounty editor disabled: {self.garage_detection_error}")
+            label.setObjectName("mutedLabel")
+            label.setWordWrap(True)
+            self.garage_rows_layout.addWidget(label, 0, 0, 1, columns)
+            return
+
+        visible_slots = self._visible_garage_slots()
+        if not visible_slots:
+            if self.garage_slots:
+                msg = "No occupied garage slots. Enable 'Show empty valid garage slots' in Settings."
+            else:
+                msg = "No valid garage slots detected."
+            label = QLabel(msg)
+            label.setObjectName("mutedLabel")
+            label.setWordWrap(True)
+            self.garage_rows_layout.addWidget(label, 0, 0, 1, columns)
+            return
+
+        for idx, slot in enumerate(visible_slots):
+            card = QFrame()
+            card.setObjectName("garageSlotCard")
+            card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(6, 4, 8, 6)
+            card_layout.setSpacing(8)
+
+            label = QLabel(f"Car Slot {slot.slot_index + 1}")
+            label.setObjectName("garageSlotTitle")
+
+            edit = QLineEdit()
+            edit.setPlaceholderText("0")
+            edit.setMinimumWidth(120)
+            edit.setMaximumWidth(160)
+            edit.setValidator(self._profile_number_validator)
+            edit.editingFinished.connect(lambda idx=slot.slot_index: self.on_garage_slot_edit_finished(idx))
+
+            current = QLabel("Current: -")
+            current.setObjectName("mutedLabel")
+            current.setWordWrap(True)
+            current.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+            self.garage_slot_edits[slot.slot_index] = edit
+            self.garage_slot_current_labels[slot.slot_index] = current
+
+            edit_row = QHBoxLayout()
+            edit_row.setContentsMargins(0, 0, 0, 0)
+            edit_row.setSpacing(10)
+            edit_row.addWidget(edit, 0)
+            edit_row.addWidget(current, 1)
+
+            card_layout.addWidget(label)
+            card_layout.addLayout(edit_row)
+
+            rows_per_col = (len(visible_slots) + columns - 1) // columns
+            col = idx // rows_per_col
+            row = idx % rows_per_col
+            self.garage_rows_layout.addWidget(card, row, col)
+
+        for col in range(columns):
+            self.garage_rows_layout.setColumnStretch(col, 1)
+
+    def _current_slot_bounties(self) -> Dict[int, int]:
+        want_map = self.want_slot_bounties or {}
+        return {
+            slot.slot_index: want_map.get(slot.slot_index, self.have_slot_bounties.get(slot.slot_index, 0))
+            for slot in self.garage_slots
+        }
+
+    def _set_profile_line_edit(self, edit: QLineEdit, value: int, enabled: bool) -> None:
+        edit.blockSignals(True)
+        edit.setText(self._format_u32(value) if enabled else "")
+        edit.setEnabled(enabled)
+        edit.blockSignals(False)
+
+    def _refresh_garage_totals(self, loaded: bool) -> None:
+        if not loaded:
+            self.total_bounty_label.setText("-")
+            self.total_bounty_current_label.setText("Current: -")
+            self.escaped_total_label.setText("-")
+            self.escaped_total_current_label.setText("Current: -")
+            self.busted_total_label.setText("-")
+            self.busted_total_current_label.setText("Current: -")
+            return
+
+        if self.garage_detection_error:
+            self.total_bounty_label.setText("Unavailable")
+            self.total_bounty_current_label.setText(self.garage_detection_error)
+            self.escaped_total_label.setText("Unavailable")
+            self.escaped_total_current_label.setText("Current: -")
+            self.busted_total_label.setText("Unavailable")
+            self.busted_total_current_label.setText("Current: -")
+            return
+
+        have_total = sum(self.have_slot_bounties.values())
+        current_total = sum(self._current_slot_bounties().values())
+        escaped_total = sum(slot.escaped for slot in self.garage_slots)
+        busted_total = sum(slot.busted for slot in self.garage_slots)
+
+        self.total_bounty_label.setText(self._format_u32(current_total))
+        self.total_bounty_current_label.setText(self._format_current_value(have_total))
+        self.escaped_total_label.setText(self._format_u32(escaped_total))
+        self.escaped_total_current_label.setText(self._format_current_value(escaped_total))
+        self.busted_total_label.setText(self._format_u32(busted_total))
+        self.busted_total_current_label.setText(self._format_current_value(busted_total))
+
+    def _refresh_profile_inputs(self) -> None:
+        loaded = self.savefile is not None
+        self.chk_show_all_garage_slots.blockSignals(True)
+        self.chk_show_all_garage_slots.setChecked(self.show_all_garage_slots)
+        self.chk_show_all_garage_slots.setEnabled(loaded and not self.garage_detection_error and bool(self.garage_slots))
+        self.chk_show_all_garage_slots.blockSignals(False)
+        self.chk_show_integrity.blockSignals(True)
+        self.chk_show_integrity.setChecked(self.show_integrity_panel)
+        self.chk_show_integrity.blockSignals(False)
+        self._sync_integrity_visibility()
+        self._rebuild_garage_slot_rows()
+
+        self._profile_refreshing = True
+        try:
+            money_value = self.want_money if self.want_money is not None else self.have_money
+            self._set_profile_line_edit(self.money_edit, money_value, loaded)
+            self.money_current_label.setText(
+                self._format_current_value(self.have_money) if loaded else "Current: -"
+            )
+            self._refresh_garage_totals(loaded)
+
+            want_slot_bounties = self._current_slot_bounties() if loaded else {}
+            for slot in self._visible_garage_slots():
+                edit = self.garage_slot_edits.get(slot.slot_index)
+                current = self.garage_slot_current_labels.get(slot.slot_index)
+                if edit is None or current is None:
+                    continue
+                current_value = self.have_slot_bounties.get(slot.slot_index, 0)
+                self._set_profile_line_edit(edit, want_slot_bounties.get(slot.slot_index, current_value), loaded)
+                suffix = "" if slot.occupied else " [empty slot]"
+                current.setText(self._format_current_value(current_value) + suffix)
+        finally:
+            self._profile_refreshing = False
+
+    def _commit_profile_edit(self, edit: QLineEdit, fallback: int) -> Optional[int]:
+        try:
+            value = self._parse_u32_text(edit.text())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid value", str(exc))
+            self._set_profile_line_edit(edit, fallback, True)
+            edit.setFocus()
+            edit.selectAll()
+            return None
+
+        self._set_profile_line_edit(edit, value, True)
+        return value
+
+    def _has_profile_pending_changes(self) -> bool:
+        if self.savefile is None:
+            return False
+        if (self.want_money if self.want_money is not None else self.have_money) != self.have_money:
+            return True
+        if self.garage_detection_error:
+            return False
+        for slot in self.garage_slots:
+            have = self.have_slot_bounties.get(slot.slot_index, 0)
+            want = self._current_slot_bounties().get(slot.slot_index, have)
+            if want != have:
+                return True
+        return False
+
+    def on_money_edit_finished(self) -> None:
+        if self._profile_refreshing or not self.savefile:
+            return
+        fallback = self.want_money if self.want_money is not None else self.have_money
+        value = self._commit_profile_edit(self.money_edit, fallback)
+        if value is None:
+            return
+        self.want_money = value
+        self._update_action_states()
+
+    def on_toggle_show_all_garage_slots(self) -> None:
+        self.show_all_garage_slots = self.chk_show_all_garage_slots.isChecked()
+        self._refresh_profile_inputs()
+
+    def on_toggle_show_integrity(self) -> None:
+        self.show_integrity_panel = self.chk_show_integrity.isChecked()
+        self._sync_integrity_visibility()
+
+    def on_garage_slot_edit_finished(self, slot_index: int) -> None:
+        if self._profile_refreshing or not self.savefile:
+            return
+        if self.garage_detection_error:
+            return
+        edit = self.garage_slot_edits.get(slot_index)
+        if edit is None:
+            return
+        current_want = self._current_slot_bounties()
+        fallback = current_want.get(slot_index, self.have_slot_bounties.get(slot_index, 0))
+        value = self._commit_profile_edit(edit, fallback)
+        if value is None:
+            return
+        if self.want_slot_bounties is None:
+            self.want_slot_bounties = dict(self.have_slot_bounties)
+        self.want_slot_bounties[slot_index] = value
+        self._refresh_garage_totals(True)
+        self._update_action_states()
 
     def _select_category(self, cat: str):
         for c, b in self.cat_buttons.items():
@@ -789,20 +1231,50 @@ class MainWindow(QMainWindow):
                 f"MD5 computed: {(integrity.computed_md5.hex() if integrity.computed_md5 else '-')}\n"
             )
             self.have_counts = self.savefile.get_junkman_counts()
+            self.have_money = self.savefile.get_money()
+            self.garage_detection_error = None
+            try:
+                self.garage_slots = self.savefile.get_garage_slots()
+                self.have_slot_bounties = {
+                    slot.slot_index: slot.bounty for slot in self.garage_slots
+                }
+            except Exception as exc:
+                self.garage_detection_error = str(exc)
+                self.garage_slots = []
+                self.have_slot_bounties = {}
             for tid in self.have_counts:
                 self.ensure_token_entry(tid)
             if not self.want_counts:
                 self.want_counts = dict(self.have_counts)
+            if self.want_money is None:
+                self.want_money = self.have_money
+            if self.garage_detection_error:
+                self.want_slot_bounties = None
+            elif self.want_slot_bounties is None:
+                self.want_slot_bounties = dict(self.have_slot_bounties)
+            else:
+                self.want_slot_bounties = {
+                    slot.slot_index: self.want_slot_bounties.get(slot.slot_index, slot.bounty)
+                    for slot in self.garage_slots
+                }
         else:
             self.lbl_file.setText("File: (not opened)")
             self.lbl_status.setText("Status: -")
             self.profile_info.setText("")
             self.have_counts = {}
             self.want_counts = {}
+            self.have_money = 0
+            self.want_money = None
+            self.garage_slots = []
+            self.have_slot_bounties = {}
+            self.want_slot_bounties = None
+            self.garage_detection_error = None
+            self.show_all_garage_slots = False
 
         self.lbl_limits.setText(
             f"Limits: Safe {min(63, self._slot_capacity())}, Advanced {min(255, self._slot_capacity())}"
         )
+        self._refresh_profile_inputs()
         self.refresh_cards()
 
     # -- Card grid rendering ---------------------------------------------
@@ -924,7 +1396,7 @@ class MainWindow(QMainWindow):
             want = self.want_counts.get(tid, have)
             if want != have:
                 return True
-        return self.clear_unknown_next
+        return self.clear_unknown_next or self._has_profile_pending_changes()
 
     def _update_action_states(self):
         pending = self._has_pending_changes()
@@ -951,6 +1423,7 @@ class MainWindow(QMainWindow):
                 self.refresh_cards()
             else:
                 self.cards_container.setFixedWidth(self._card_area_width(prev))
+        self._maybe_reflow_garage_rows()
 
     # -- Drag & drop ------------------------------------------------
 
@@ -1053,6 +1526,9 @@ class MainWindow(QMainWindow):
 
     def on_reset_want(self):
         self.want_counts = dict(self.have_counts)
+        self.want_money = self.have_money
+        self.want_slot_bounties = None if self.garage_detection_error else dict(self.have_slot_bounties)
+        self._refresh_profile_inputs()
         self.refresh_cards()
 
     def on_clear_all_want(self):
@@ -1082,7 +1558,17 @@ class MainWindow(QMainWindow):
         unknown_preserved = 0
         if self.preserve_unknown and not self.clear_unknown_next:
             unknown_preserved = sum(want_full.get(tid, 0) for tid in self._unknown_ids())
-        return (
+        slot_changes = []
+        if not self.garage_detection_error:
+            want_slot_bounties = self._current_slot_bounties()
+            for slot in self.garage_slots:
+                have = self.have_slot_bounties.get(slot.slot_index, 0)
+                want = want_slot_bounties.get(slot.slot_index, have)
+                if want != have:
+                    slot_changes.append(f"Car Slot {slot.slot_index + 1}: {have} -> {want}")
+        have_total_bounty = sum(self.have_slot_bounties.values())
+        want_total_bounty = sum(self._current_slot_bounties().values()) if not self.garage_detection_error else None
+        summary = (
             f"Total slots: {total}\n"
             f"Used (have): {used}\n"
             f"Free: {free}\n"
@@ -1090,6 +1576,14 @@ class MainWindow(QMainWindow):
             f"Delta: +{add} / -{remove}\n"
             f"Unknown preserved: {unknown_preserved}"
         )
+        summary += f"\n\nProfile changes:\nMoney: {self.have_money} -> {self.want_money if self.want_money is not None else self.have_money}"
+        if self.garage_detection_error:
+            summary += f"\nGarage Bounty: unavailable ({self.garage_detection_error})"
+        else:
+            summary += f"\nTotal Bounty / Rating: {have_total_bounty} -> {want_total_bounty}"
+            if slot_changes:
+                summary += "\n" + "\n".join(slot_changes)
+        return summary
 
     def on_apply_changes(self):
         if not self.savefile:
@@ -1128,10 +1622,15 @@ class MainWindow(QMainWindow):
             return
         try:
             self.savefile.set_junkman_counts(want_full, clamp_max=self._current_max())
-            self.have_counts = self.savefile.get_junkman_counts()
-            self.want_counts = dict(self.have_counts)
+            self.savefile.set_money(self.want_money if self.want_money is not None else self.have_money)
+            if not self.garage_detection_error:
+                for slot_index, value in self._current_slot_bounties().items():
+                    self.savefile.set_slot_bounty(slot_index, value)
+            self.want_counts = {}
+            self.want_money = None
+            self.want_slot_bounties = None
             self.clear_unknown_next = False
-            self.refresh_cards()
+            self.refresh_state()
             ToastNotification.show_toast(self, "Changes applied in memory")
         except Exception as e:
             QMessageBox.critical(self, "Apply failed", str(e))
@@ -1218,6 +1717,9 @@ class MainWindow(QMainWindow):
         try:
             self.savefile = SaveFile.load(path)
             self.want_counts = {}
+            self.want_money = None
+            self.want_slot_bounties = None
+            self.garage_detection_error = None
             self.refresh_state()
             ToastNotification.show_toast(self, "Save loaded")
         except Exception as e:

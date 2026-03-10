@@ -43,6 +43,17 @@ class IntegrityStatus:
     crc_details: Dict[str, Tuple[int, int]]
 
 
+@dataclass(frozen=True)
+class GarageSlot:
+    slot_index: int
+    car_id: int
+    occupied: bool
+    bounty: int
+    escaped: int
+    busted: int
+    abs_off: int
+
+
 class SaveFile:
     # Junkman inventory slot layout (dynamically detected)
     SAVED_DATA_START = JunkmanInventory.SAVED_DATA_START
@@ -51,6 +62,15 @@ class SaveFile:
     SLOT_COUNT_OFF = 0x08
     SLOT_SIZE = JunkmanInventory.SLOT_SIZE
     SLOT_MAX = 200  # upper bound for diff helpers
+    MONEY_OFFSET = 0x4039
+    GARAGE_BASE_OFFSET = 0xE2ED
+    GARAGE_SLOT_SIZE = 0x38
+    GARAGE_BOUNTY_OFFSET = 0x10
+    GARAGE_ESCAPED_OFFSET = 0x14
+    GARAGE_BUSTED_OFFSET = 0x16
+    GARAGE_SIGNATURE_A = b"\xCD\x03\x00"
+    GARAGE_SIGNATURE_B = b"\x00\x00\xCD\xCD"
+    INVALID_CAR_ID = 0xFF
 
     def __init__(self, path: Path, data: bytearray, layout: SaveLayout | None = None, hash_scheme: HashScheme = None):
         self.path = path
@@ -74,8 +94,21 @@ class SaveFile:
     def _read_u32(self, offset: int) -> int:
         return struct.unpack_from("<I", self.data, offset)[0]
 
+    def _read_u16(self, offset: int) -> int:
+        return struct.unpack_from("<H", self.data, offset)[0]
+
+    def _read_u8(self, offset: int) -> int:
+        return self.data[offset]
+
     def _write_u32(self, offset: int, value: int) -> None:
         struct.pack_into("<I", self.data, offset, int(value) & 0xFFFFFFFF)
+
+    @staticmethod
+    def _require_u32(value: int) -> int:
+        ivalue = int(value)
+        if not (0 <= ivalue <= 0xFFFFFFFF):
+            raise ValueError("value must be in range 0..4294967295")
+        return ivalue
 
     def saved_data_slice(self) -> Tuple[int, int]:
         start = self.layout.saved_data_offset
@@ -159,6 +192,69 @@ class SaveFile:
             if limit is not None and len(res) >= limit:
                 break
         return res
+
+    # --- economy / garage bounty ---
+
+    def get_money(self) -> int:
+        return self._read_u32(self.MONEY_OFFSET)
+
+    def set_money(self, value: int) -> None:
+        self._write_u32(self.MONEY_OFFSET, self._require_u32(value))
+
+    @classmethod
+    def _is_garage_slot(cls, raw: bytes) -> bool:
+        return (
+            len(raw) == cls.GARAGE_SLOT_SIZE
+            and raw[1:4] == cls.GARAGE_SIGNATURE_A
+            and raw[8:12] == cls.GARAGE_SIGNATURE_B
+        )
+
+    def get_garage_slots(self) -> List[GarageSlot]:
+        slots: List[GarageSlot] = []
+        slot_index = 0
+        base_off = self.GARAGE_BASE_OFFSET
+
+        while base_off + self.GARAGE_SLOT_SIZE <= len(self.data):
+            raw = bytes(self.data[base_off:base_off + self.GARAGE_SLOT_SIZE])
+            if not self._is_garage_slot(raw):
+                break
+            car_id = raw[0]
+            slots.append(
+                GarageSlot(
+                    slot_index=slot_index,
+                    car_id=car_id,
+                    occupied=(car_id != self.INVALID_CAR_ID),
+                    bounty=self._read_u32(base_off + self.GARAGE_BOUNTY_OFFSET),
+                    escaped=self._read_u16(base_off + self.GARAGE_ESCAPED_OFFSET),
+                    busted=self._read_u16(base_off + self.GARAGE_BUSTED_OFFSET),
+                    abs_off=base_off,
+                )
+            )
+            base_off += self.GARAGE_SLOT_SIZE
+            slot_index += 1
+
+        if not slots:
+            raise ValueError("Failed to detect garage block")
+        return slots
+
+    def set_slot_bounty(self, slot_index: int, value: int) -> None:
+        wanted = int(slot_index)
+        bounty = self._require_u32(value)
+        for slot in self.get_garage_slots():
+            if slot.slot_index == wanted:
+                self._write_u32(slot.abs_off + self.GARAGE_BOUNTY_OFFSET, bounty)
+                return
+        raise ValueError(f"Garage slot {wanted} was not detected")
+
+    def get_total_bounty(self) -> int:
+        return sum(slot.bounty for slot in self.get_garage_slots())
+
+    def get_escape_bust_totals(self) -> Tuple[int, int]:
+        slots = self.get_garage_slots()
+        return (
+            sum(slot.escaped for slot in slots),
+            sum(slot.busted for slot in slots),
+        )
 
     # --- integrity ---
 
