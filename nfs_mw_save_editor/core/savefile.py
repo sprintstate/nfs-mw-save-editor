@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
+from core.cars import resolve_car_name
 from core.checksums import ea_crc32
 from core.junkman import JunkmanInventory
 
@@ -44,14 +45,37 @@ class IntegrityStatus:
 
 
 @dataclass(frozen=True)
-class GarageSlot:
-    slot_index: int
-    car_id: int
-    occupied: bool
+class PursuitRecord:
+    career_slot: int
     bounty: int
     escaped: int
     busted: int
     abs_off: int
+
+
+@dataclass(frozen=True)
+class CareerVehicleRecord:
+    car_number: int
+    signature: bytes
+    flags: int
+    flags2: int
+    parts_slot: int
+    career_slot: int
+    abs_off: int
+
+
+@dataclass(frozen=True)
+class ResolvedGarageEntry:
+    career_slot: int
+    car_number: Optional[int]
+    signature: Optional[bytes]
+    display_name: str
+    occupied: bool
+    bounty: int
+    escaped: int
+    busted: int
+    pursuit_abs_off: int
+    car_abs_off: Optional[int]
 
 
 class SaveFile:
@@ -70,7 +94,17 @@ class SaveFile:
     GARAGE_BUSTED_OFFSET = 0x16
     GARAGE_SIGNATURE_A = b"\xCD\x03\x00"
     GARAGE_SIGNATURE_B = b"\x00\x00\xCD\xCD"
-    INVALID_CAR_ID = 0xFF
+    CAREER_VEHICLE_BASE_OFFSET = 0x6219
+    CAREER_VEHICLE_SIZE = 0x14
+    CAREER_VEHICLE_SIGNATURE_OFFSET = 0x04
+    CAREER_VEHICLE_SIGNATURE_SIZE = 0x08
+    CAREER_VEHICLE_FLAGS_OFFSET = 0x0C
+    CAREER_VEHICLE_FLAGS2_OFFSET = 0x0E
+    CAREER_VEHICLE_PARTS_SLOT_OFFSET = 0x10
+    CAREER_VEHICLE_SLOT_OFFSET = 0x11
+    CAREER_VEHICLE_SENTINEL = b"\xCD\xCD"
+    EMPTY_CAR_NUMBER = 0xFFFFFFFF
+    EMPTY_CAREER_SLOT = 0xFF
 
     def __init__(self, path: Path, data: bytearray, layout: SaveLayout | None = None, hash_scheme: HashScheme = None):
         self.path = path
@@ -209,8 +243,8 @@ class SaveFile:
             and raw[8:12] == cls.GARAGE_SIGNATURE_B
         )
 
-    def get_garage_slots(self) -> List[GarageSlot]:
-        slots: List[GarageSlot] = []
+    def get_pursuit_records(self) -> List[PursuitRecord]:
+        slots: List[PursuitRecord] = []
         slot_index = 0
         base_off = self.GARAGE_BASE_OFFSET
 
@@ -218,12 +252,9 @@ class SaveFile:
             raw = bytes(self.data[base_off:base_off + self.GARAGE_SLOT_SIZE])
             if not self._is_garage_slot(raw):
                 break
-            car_id = raw[0]
             slots.append(
-                GarageSlot(
-                    slot_index=slot_index,
-                    car_id=car_id,
-                    occupied=(car_id != self.INVALID_CAR_ID),
+                PursuitRecord(
+                    career_slot=slot_index,
                     bounty=self._read_u32(base_off + self.GARAGE_BOUNTY_OFFSET),
                     escaped=self._read_u16(base_off + self.GARAGE_ESCAPED_OFFSET),
                     busted=self._read_u16(base_off + self.GARAGE_BUSTED_OFFSET),
@@ -237,11 +268,95 @@ class SaveFile:
             raise ValueError("Failed to detect garage block")
         return slots
 
+    def get_career_vehicle_records(self) -> List[CareerVehicleRecord]:
+        records: List[CareerVehicleRecord] = []
+        base_off = self.CAREER_VEHICLE_BASE_OFFSET
+
+        while base_off + self.CAREER_VEHICLE_SIZE <= len(self.data):
+            raw = bytes(self.data[base_off:base_off + self.CAREER_VEHICLE_SIZE])
+            if raw[0x12:0x14] != self.CAREER_VEHICLE_SENTINEL:
+                break
+
+            car_number = self._read_u32(base_off)
+            signature = bytes(
+                self.data[
+                    base_off + self.CAREER_VEHICLE_SIGNATURE_OFFSET:
+                    base_off + self.CAREER_VEHICLE_SIGNATURE_OFFSET + self.CAREER_VEHICLE_SIGNATURE_SIZE
+                ]
+            )
+            career_slot = self._read_u8(base_off + self.CAREER_VEHICLE_SLOT_OFFSET)
+            if (
+                car_number != self.EMPTY_CAR_NUMBER
+                and signature != (b"\x00" * self.CAREER_VEHICLE_SIGNATURE_SIZE)
+                and career_slot != self.EMPTY_CAREER_SLOT
+            ):
+                records.append(
+                    CareerVehicleRecord(
+                        car_number=car_number,
+                        signature=signature,
+                        flags=self._read_u16(base_off + self.CAREER_VEHICLE_FLAGS_OFFSET),
+                        flags2=self._read_u16(base_off + self.CAREER_VEHICLE_FLAGS2_OFFSET),
+                        parts_slot=self._read_u8(base_off + self.CAREER_VEHICLE_PARTS_SLOT_OFFSET),
+                        career_slot=career_slot,
+                        abs_off=base_off,
+                    )
+                )
+
+            base_off += self.CAREER_VEHICLE_SIZE
+
+        return records
+
+    def get_garage_slots(self) -> List[ResolvedGarageEntry]:
+        pursuits = self.get_pursuit_records()
+        car_records_by_slot: Dict[int, List[CareerVehicleRecord]] = {}
+        for record in self.get_career_vehicle_records():
+            car_records_by_slot.setdefault(record.career_slot, []).append(record)
+
+        resolved: List[ResolvedGarageEntry] = []
+        for pursuit in pursuits:
+            matches = car_records_by_slot.get(pursuit.career_slot, [])
+            match = matches[0] if len(matches) == 1 else None
+            occupied = bool(matches) or any((pursuit.bounty, pursuit.escaped, pursuit.busted))
+
+            if match is not None:
+                display_name = resolve_car_name(match.signature) or f"Sig {match.signature.hex().upper()}"
+                car_number = match.car_number
+                signature = match.signature
+                car_abs_off = match.abs_off
+            elif len(matches) > 1:
+                display_name = f"Ambiguous vehicle ({len(matches)})"
+                car_number = None
+                signature = None
+                car_abs_off = None
+                occupied = True
+            else:
+                display_name = "Empty" if not occupied else "Unlinked vehicle"
+                car_number = None
+                signature = None
+                car_abs_off = None
+
+            resolved.append(
+                ResolvedGarageEntry(
+                    career_slot=pursuit.career_slot,
+                    car_number=car_number,
+                    signature=signature,
+                    display_name=display_name,
+                    occupied=occupied,
+                    bounty=pursuit.bounty,
+                    escaped=pursuit.escaped,
+                    busted=pursuit.busted,
+                    pursuit_abs_off=pursuit.abs_off,
+                    car_abs_off=car_abs_off,
+                )
+            )
+
+        return sorted(resolved, key=lambda item: item.career_slot)
+
     def set_slot_bounty(self, slot_index: int, value: int) -> None:
         wanted = int(slot_index)
         bounty = self._require_u32(value)
-        for slot in self.get_garage_slots():
-            if slot.slot_index == wanted:
+        for slot in self.get_pursuit_records():
+            if slot.career_slot == wanted:
                 self._write_u32(slot.abs_off + self.GARAGE_BOUNTY_OFFSET, bounty)
                 return
         raise ValueError(f"Garage slot {wanted} was not detected")

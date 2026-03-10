@@ -44,9 +44,9 @@ from PySide6.QtWidgets import (
 )
 
 from core.junkman import JunkmanInventory
-from core.savefile import GarageSlot, SaveFile
+from core.savefile import ResolvedGarageEntry, SaveFile
 from resources import resource_path
-from ui.icon_map import car_display_name, cat_icon_path, nav_icon_path
+from ui.icon_map import cat_icon_path, nav_icon_path
 from ui.widgets import TokenCard, ToastNotification
 
 
@@ -123,7 +123,7 @@ class MainWindow(QMainWindow):
         self.want_counts: Dict[int, int] = {}
         self.have_money = 0
         self.want_money: Optional[int] = None
-        self.garage_slots: List[GarageSlot] = []
+        self.garage_slots: List[ResolvedGarageEntry] = []
         self.have_slot_bounties: Dict[int, int] = {}
         self.want_slot_bounties: Optional[Dict[int, int]] = None
         self.garage_detection_error: Optional[str] = None
@@ -868,7 +868,7 @@ class MainWindow(QMainWindow):
     def _format_current_value(value: int) -> str:
         return f"Current: {value}"
 
-    def _visible_garage_slots(self) -> List[GarageSlot]:
+    def _visible_garage_slots(self) -> List[ResolvedGarageEntry]:
         if self.show_all_garage_slots:
             return list(self.garage_slots)
         return [slot for slot in self.garage_slots if slot.occupied]
@@ -949,13 +949,12 @@ class MainWindow(QMainWindow):
             card_layout.setSpacing(6)
 
             # ── Header: slot number + car name ──────────────
-            slot_label = QLabel(f"Slot {slot.slot_index + 1}")
+            slot_label = QLabel(f"Slot {slot.career_slot + 1}")
             slot_label.setObjectName("garageCardSlot")
             slot_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
             slot_label.setAlignment(Qt.AlignCenter)
 
-            car_name = car_display_name(slot.car_id) if slot.occupied else "Empty"
-            name_label = QLabel(car_name)
+            name_label = QLabel(slot.display_name)
             name_label.setObjectName("garageCardMeta")
             name_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
             name_label.setAlignment(Qt.AlignCenter)
@@ -981,16 +980,16 @@ class MainWindow(QMainWindow):
             edit.setObjectName("garageCardEdit")
             edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             edit.editingFinished.connect(
-                lambda idx=slot.slot_index: self.on_garage_slot_edit_finished(idx),
+                lambda idx=slot.career_slot: self.on_garage_slot_edit_finished(idx),
             )
 
             current = QLabel("Current: -")
             current.setObjectName("garageCardCurrent")
             current.setAlignment(Qt.AlignCenter)
 
-            self.garage_slot_edits[slot.slot_index] = edit
-            self.garage_slot_current_labels[slot.slot_index] = current
-            self._garage_card_widgets[slot.slot_index] = card
+            self.garage_slot_edits[slot.career_slot] = edit
+            self.garage_slot_current_labels[slot.career_slot] = current
+            self._garage_card_widgets[slot.career_slot] = card
 
             card_layout.addWidget(bounty_label)
             card_layout.addWidget(edit)
@@ -1024,7 +1023,7 @@ class MainWindow(QMainWindow):
     def _current_slot_bounties(self) -> Dict[int, int]:
         want_map = self.want_slot_bounties or {}
         return {
-            slot.slot_index: want_map.get(slot.slot_index, self.have_slot_bounties.get(slot.slot_index, 0))
+            slot.career_slot: want_map.get(slot.career_slot, self.have_slot_bounties.get(slot.career_slot, 0))
             for slot in self.garage_slots
         }
 
@@ -1088,16 +1087,16 @@ class MainWindow(QMainWindow):
 
             want_slot_bounties = self._current_slot_bounties() if loaded else {}
             for slot in self._visible_garage_slots():
-                edit = self.garage_slot_edits.get(slot.slot_index)
-                current = self.garage_slot_current_labels.get(slot.slot_index)
+                edit = self.garage_slot_edits.get(slot.career_slot)
+                current = self.garage_slot_current_labels.get(slot.career_slot)
                 if edit is None or current is None:
                     continue
-                have_val = self.have_slot_bounties.get(slot.slot_index, 0)
-                want_val = want_slot_bounties.get(slot.slot_index, have_val)
+                have_val = self.have_slot_bounties.get(slot.career_slot, 0)
+                want_val = want_slot_bounties.get(slot.career_slot, have_val)
                 self._set_profile_line_edit(edit, want_val, loaded)
                 current.setText(self._format_current_value(have_val))
                 # Highlight card if bounty was changed
-                card_w = self._garage_card_widgets.get(slot.slot_index)
+                card_w = self._garage_card_widgets.get(slot.career_slot)
                 if card_w is not None:
                     changed = want_val != have_val
                     card_w.setProperty("changed", changed)
@@ -1127,8 +1126,8 @@ class MainWindow(QMainWindow):
         if self.garage_detection_error:
             return False
         for slot in self.garage_slots:
-            have = self.have_slot_bounties.get(slot.slot_index, 0)
-            want = self._current_slot_bounties().get(slot.slot_index, have)
+            have = self.have_slot_bounties.get(slot.career_slot, 0)
+            want = self._current_slot_bounties().get(slot.career_slot, have)
             if want != have:
                 return True
         return False
@@ -1278,7 +1277,7 @@ class MainWindow(QMainWindow):
             try:
                 self.garage_slots = self.savefile.get_garage_slots()
                 self.have_slot_bounties = {
-                    slot.slot_index: slot.bounty for slot in self.garage_slots
+                    slot.career_slot: slot.bounty for slot in self.garage_slots
                 }
             except Exception as exc:
                 self.garage_detection_error = str(exc)
@@ -1296,7 +1295,7 @@ class MainWindow(QMainWindow):
                 self.want_slot_bounties = dict(self.have_slot_bounties)
             else:
                 self.want_slot_bounties = {
-                    slot.slot_index: self.want_slot_bounties.get(slot.slot_index, slot.bounty)
+                    slot.career_slot: self.want_slot_bounties.get(slot.career_slot, slot.bounty)
                     for slot in self.garage_slots
                 }
         else:
@@ -1604,11 +1603,10 @@ class MainWindow(QMainWindow):
         if not self.garage_detection_error:
             want_slot_bounties = self._current_slot_bounties()
             for slot in self.garage_slots:
-                have = self.have_slot_bounties.get(slot.slot_index, 0)
-                want = want_slot_bounties.get(slot.slot_index, have)
+                have = self.have_slot_bounties.get(slot.career_slot, 0)
+                want = want_slot_bounties.get(slot.career_slot, have)
                 if want != have:
-                    name = car_display_name(slot.car_id) if slot.occupied else f"Slot {slot.slot_index + 1}"
-                    slot_changes.append(f"{name}: {have} -> {want}")
+                    slot_changes.append(f"Slot {slot.career_slot + 1} - {slot.display_name}: {have} -> {want}")
         have_total_bounty = sum(self.have_slot_bounties.values())
         want_total_bounty = sum(self._current_slot_bounties().values()) if not self.garage_detection_error else None
         summary = (
