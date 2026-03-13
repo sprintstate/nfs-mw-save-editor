@@ -330,6 +330,10 @@ QLabel#statTileHeading {{
     letter-spacing: 0.5px;
 }}
 QLabel#statTileValue {{
+    background: #0F1524;
+    border: 1px solid {BORDER};
+    border-radius: 9px;
+    padding: 4px 12px;
     color: {ACCENT_BRIGHT};
     font-size: 18px;
     font-weight: 700;

@@ -601,6 +601,7 @@ class MainWindow(QMainWindow):
 
         self.total_bounty_label = QLabel("-")
         self.total_bounty_label.setObjectName("statTileValue")
+        self.total_bounty_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.total_bounty_label.setAlignment(Qt.AlignCenter)
         self.total_bounty_current_label = QLabel("Current: -")
         self.total_bounty_current_label.setObjectName("statTileSub")
@@ -611,6 +612,7 @@ class MainWindow(QMainWindow):
 
         self.escaped_total_label = QLabel("-")
         self.escaped_total_label.setObjectName("statTileValue")
+        self.escaped_total_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.escaped_total_label.setAlignment(Qt.AlignCenter)
         self.escaped_total_current_label = QLabel("Current: -")
         self.escaped_total_current_label.setObjectName("statTileSub")
@@ -621,6 +623,7 @@ class MainWindow(QMainWindow):
 
         self.busted_total_label = QLabel("-")
         self.busted_total_label.setObjectName("statTileValue")
+        self.busted_total_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.busted_total_label.setAlignment(Qt.AlignCenter)
         self.busted_total_current_label = QLabel("Current: -")
         self.busted_total_current_label.setObjectName("statTileSub")
